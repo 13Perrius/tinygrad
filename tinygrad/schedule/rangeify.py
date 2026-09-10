@@ -11,6 +11,11 @@ from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, apply_movement_op
 from tinygrad.schedule.prepare import pm_mops
 
+import os
+R = int(os.getenv("R", 0))
+if R:
+  from tinygrad.schedule.indexing4 import run_rangeify
+
 # creation can recurse a lot
 import sys
 sys.setrecursionlimit(10000)
@@ -372,6 +377,9 @@ split_kernels = PatternMatcher([
 def get_kernel_graph(tsink:UOp) -> UOp:
   # convert movement ops to ranges
   tsink = run_rangeify(tsink, bool(DEBUG_RANGEIFY))
+  if R: 
+    if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View kernel graph")
+    return tsink
 
   # cleanups for speed and runability
   tsink = graph_rewrite(tsink,

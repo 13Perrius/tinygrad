@@ -367,7 +367,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       case Ops.PYLITERAL: return None
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        R = int(os.getenv("R", 0))
+        if R:
+          return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
+        else:
+          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
@@ -549,6 +553,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     new_srcs: list[UOp] = [UOp.const(x) if isinstance(x, int) else x for x in srcs if x is not None]
     if len(new_srcs) == 1 and new_srcs[0].op is Ops.CONST and self.op is Ops.STACK: return self.src[new_srcs[0].val]
     return UOp(Ops.INDEX, src=(self,)+tuple(new_srcs), **kwargs)
+  def stage(self, in_rngs:tuple[UOp, ...], out_rngs:tuple[UOp, ...], **kwargs):
+    return UOp(Ops.STAGE, src=(self.index(*out_rngs), *in_rngs), **kwargs)
   def __getitem__(self, idx):
     # buffers index into INDEX UOps (scalar lookup); everything else uses the shared mixin view path
     if self.addrspace in (None, AddrSpace.ALU) or self.device is not None: return super(UOp, self).__getitem__(idx)
@@ -843,7 +849,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @recursive_property
   def device(self) -> str|tuple[str, ...]|None:
     if self.op is Ops.PARAM: return self.arg.device
-    if self.op is Ops.STAGE: return self.arg.device
     if self.op is Ops.AFTER: return self.src[0].device
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
