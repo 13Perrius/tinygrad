@@ -41,6 +41,13 @@ pm_fold_ranges = PatternMatcher([
   (UPat(Ops.STAGE, name="s"), push_ranges)
 ])
 
+#TODO: incorporate into fold_ranges, or keep separate?
+
+pm_push_multi = PatternMatcher([
+  (UPat((Ops.MSTACK, Ops.MSELECT), src=(UPat(Ops.STAGE, name="s"),), allow_any_len=True, name="m"),
+  lambda m, s: m.replace(src=(s.src[0].src[0], *m.src[1:])).stage(stage_in(s), stage_out(s)))
+])
+
 def count_consumes(tsink):
   realize, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
@@ -89,11 +96,12 @@ pm_presplit = PatternMatcher([
 
 def add_arg(ctx, x):
   if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.replace(arg=replace(x.arg, slot=-1)).rtag()
+  if not ((x.has_buffer_identity(after_ok=True) or x.op in {Ops.MSTACK, Ops.MSELECT}) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
 pm_kernel_arg = PatternMatcher([
-  (UPat(GroupOp.All, name="x"), lambda ctx, x: add_arg(ctx, x) if x.has_buffer_identity(after_ok=True) and x.tag is None else None),
+  (UPat(GroupOp.All, name="x"), add_arg),
   (UPat(Ops.RANGE, name="r"), lambda ctx, r: r.replace(arg=(next(ctx[0]), r.arg[1])).rtag() if r.tag is None else None)
 ])
 
@@ -118,7 +126,7 @@ def run_rangeify(tsink, b):
 
   tsink = graph_rewrite(tsink.substitute(realize), remove_all_tags, walk=True, name="bufferize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
-  tsink = graph_rewrite(tsink, pm_fold_ranges, bottom_up=True, name="fold ranges")
+  tsink = graph_rewrite(tsink, pm_fold_ranges+pm_push_multi, bottom_up=True, name="fold ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_fold_ranges, bottom_up=True, name="convert ranges")
 
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
