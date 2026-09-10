@@ -10,10 +10,9 @@ import itertools
 
 def new_ranges(shp, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shp))
 
-def insert_expands(x): return x.replace(src=tuple(u.expand(x.shape) if u.shape != x.shape else u for u in x.src))
-
 pm_insert_expands = PatternMatcher([
-  (UPat(GroupOp.Binary|GroupOp.Ternary|{Ops.STORE}, name="x"), insert_expands)
+  (UPat(GroupOp.Binary|GroupOp.Ternary|{Ops.STORE}, name="x"), 
+  lambda x: x.replace(src=tuple(u.expand(x.shape) if u.shape != x.shape else u for u in x.src)))
 ])
 
 def stage_in(s): return s.src[1:]
