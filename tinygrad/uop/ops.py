@@ -812,11 +812,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.without_after.op not in {Ops.BUFFER, Ops.SHRINK, Ops.BITCAST, Ops.BINARY, Ops.MSTACK, Ops.MSELECT, Ops.PARAM, Ops.LINEAR}: return self
     return UOp(Ops.GETADDR, src=(self,), arg=device or to_tuple(self.device)[0])
   @staticmethod
-  def new_buffer(device:str|tuple[str, ...], size:int, dtype:DType, num=None):
+  def new_buffer(device:str|tuple[str, ...], size:int, dtype:DType, num=None, bound=True):
     if dtype in dtypes.weaks: raise RuntimeError(f"cannot create storage for weak dtype {dtype}")
     assert isinstance(size, int), f"new_buffer size must be a concrete int, got {size}"
     slot = next(UOp.unique_num) if num is None else num
-    buf = MultiBuffer(device, size, dtype) if isinstance(device, tuple) else Buffer(device, size, dtype)
+    buf = (MultiBuffer(device, size, dtype) if isinstance(device, tuple) else Buffer(device, size, dtype)) if bound else None
     return UOp(Ops.BUFFER, arg=ParamArg(slot, dtype, size=size, device=device, buffer=buf))
   @staticmethod
   def from_buffer(opaque:Buffer, device:str|tuple[str, ...]|None=None):
