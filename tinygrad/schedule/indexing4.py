@@ -51,12 +51,9 @@ pm_push_multi = PatternMatcher([
 def count_consumes(tsink):
   realize, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    assert x in consumes, f"{x.op} not in consumes"
-    #TODO: can it just use the sink's device if device is None, like in current rangeify?
-    #TODO: figure out what to do with contiguous
-    if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.ALU|{Ops.REDUCE} and x.device is not None and x.shape != () and consumes[x] > 1):
-      bx = x.src[0] if x.op is Ops.CONTIGUOUS else x
-      realize[x] = (buf:=mint(bx)).after(buf.view_as(bx.shape, bx.axis).store(bx.rtag())).view_as(bx.shape, bx.axis)
+    if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.ALU|{Ops.REDUCE} and x.ndim > 0 and consumes[x] > 1):
+      buf = UOp.new_buffer(x.device if x.device is not None else tsink.device, prod(to_max_shape(x.shape)), x.dtype, bound=x.op is Ops.CONTIGUOUS)
+      realize[x] = buf.after(buf.view_as(x.shape, x.axis).store((x.src[0] if x.op is Ops.CONTIGUOUS else x).rtag())).view_as(x.shape, x.axis)
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
@@ -132,15 +129,4 @@ def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
   return tsink
-
-#TODO: integrate with ops.py
-
-def mint(x):
-  size = prod(to_max_shape(x.shard_shape)) if x.shard_shape else None
-  return UOp(Ops.BUFFER, arg=ParamArg(next(UOp.unique_num), dtype=x.dtype, size=size, device=x.device))
-
-
-
-
-
 
