@@ -44,8 +44,7 @@ pm_fold_ranges = PatternMatcher([
 #TODO: incorporate into fold_ranges, or keep separate?
 
 pm_push_multi = PatternMatcher([
-  (UPat((Ops.MSTACK, Ops.MSELECT), src=(UPat(Ops.STAGE, name="s"),), allow_any_len=True, name="m"),
-  lambda m, s: m.replace(src=(s.src[0].src[0], *m.src[1:])).stage(stage_in(s), stage_out(s)))
+  (UPat(Ops.MSELECT, src=(UPat(Ops.STAGE, name="s"),), name="m"), lambda m, s: m.replace(src=(s.src[0].src[0],)).stage(stage_in(s), stage_out(s))), 
 ])
 
 def count_consumes(tsink):
@@ -93,7 +92,7 @@ pm_presplit = PatternMatcher([
 
 def add_arg(ctx, x):
   if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.replace(arg=replace(x.arg, slot=-1)).rtag()
-  if not ((x.has_buffer_identity(after_ok=True) or x.op in {Ops.MSTACK, Ops.MSELECT}) and x.tag is None): return None
+  if not ((x.has_buffer_identity(after_ok=True) or x.op is Ops.MSTACK) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
