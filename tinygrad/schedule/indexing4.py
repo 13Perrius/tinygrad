@@ -3,10 +3,12 @@
 from tinygrad.schedule.indexing import apply_movement_op, BufferizeOpts
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, ParamArg, to_max_shape, KernelInfo, AddrSpace
 from tinygrad.device import MultiBuffer, Buffer
-from tinygrad.helpers import prod, VIZ
+from tinygrad.helpers import prod, VIZ, dedup
 from dataclasses import dataclass, replace, field
 
 import itertools 
+
+#NOTE: convention of u for src instead of s, since I'm using s for stage?
 
 def new_ranges(shp, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shp))
 
@@ -19,14 +21,15 @@ def stage_in(s): return s.src[1:]
 def stage_out(s): return s.src[0].src[1:]
 
 def compose_ranges(f, g):
-  out_rngs = UOp.sink(*stage_out(g)).substitute(dict(zip(stage_in(g), f.src[1:])), walk=True).src
-  return g.src[0].src[0].index(*out_rngs)
+  out_rngs = UOp.sink(*stage_out(g)).substitute(dict(zip(stage_in(g), stage_out(f)))).src
+  return g.src[0].src[0].stage(stage_in(f), out_rngs)
 
 def push_ranges(s):
   if (x:=s.src[0].src[0]).op is Ops.REDUCE: 
     return x.replace(src=(x.src[0].stage((rr:=x.src[1:])+stage_in(s), rr+stage_out(s)), *rr))
   elif x.op in GroupOp.Elementwise: 
-    return x.replace(src=tuple(u.stage(stage_in(s), stage_out(s)) for u in x.src))
+    in_rngs, out_rngs = stage_in(s), stage_out(s)
+    return x.replace(src=tuple(u.stage(in_rngs, out_rngs) for u in x.src))
   return None
 
 pm_add_ranges = PatternMatcher([
@@ -34,10 +37,13 @@ pm_add_ranges = PatternMatcher([
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.stage(rngs:=new_ranges(dst.shape), rngs).store(src.stage(rngs, rngs))),
 ])
 
+
+#TODO: factor out pm_mop_ranges?
+
 pm_fold_ranges = PatternMatcher([
   (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat(name="x"),), allow_any_len=True),
   lambda x, m: x.stage(in_rngs:=new_ranges(m.shape), apply_movement_op(m.op, x.shape, m.marg, in_rngs))),
-  (UPat(Ops.STAGE, name="g", allow_any_len=True).index(name="f", allow_any_len=True), compose_ranges),
+  (UPat(Ops.STAGE, name="f", allow_any_len=True, src=(UPat(Ops.STAGE, name="g").index(allow_any_len=True),)), compose_ranges),
   (UPat(Ops.STAGE, name="s"), push_ranges)
 ])
 
@@ -47,7 +53,7 @@ pm_push_multi = PatternMatcher([
   (UPat(Ops.MSELECT, src=(UPat(Ops.STAGE, name="s"),), name="m"), lambda m, s: m.replace(src=(s.src[0].src[0],)).stage(stage_in(s), stage_out(s))), 
 ])
 
-def count_consumes(tsink):
+def bufferize(tsink):
   realize, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
     if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.ALU|{Ops.REDUCE} and x.ndim > 0 and consumes[x] > 1):
@@ -63,6 +69,21 @@ def count_consumes(tsink):
 debug_counts = PatternMatcher([
   (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
 ])
+
+def debufferize(tsink):
+  info, bindings = {}, {}
+  for x in tsink.toposort(enter_calls=False):
+    if x in info: continue
+    sbufs, sred = zip(*(info[u] for u in x.src)) if x.src else ([], [])
+    bufs, red = dedup(sum(sbufs, [])), any(sred)
+    if x.op is Ops.REDUCE and bufs: red = True
+    elif x.op is Ops.AFTER and (bx:=x.src[0]).is_unbound:
+      if len(bufs) > 3 or red: bindings[bx] = bind_buffer(bx)
+      else: bindings[x] = x.src[1].src[1].reshape(x.shape)
+    if x.has_buffer_identity(after_ok=True) or (x.op is Ops.AFTER and x.src[0] in bindings):
+      bufs, red = [x], False
+    info[x] = (bufs, red)
+  return bindings
 
 def convert_stack_to_where(s, x):
   req = stage_out(s)[0]
@@ -92,7 +113,7 @@ pm_presplit = PatternMatcher([
 
 def add_arg(ctx, x):
   if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.replace(arg=replace(x.arg, slot=-1)).rtag()
-  if not ((x.has_buffer_identity(after_ok=True) or x.op is Ops.MSTACK) and x.tag is None): return None
+  if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
@@ -111,7 +132,7 @@ pm_split_kernels = PatternMatcher([
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  realize, consumes = count_consumes(tsink)
+  realize, consumes = bufferize(tsink)
 
   '''
   if VIZ:
@@ -123,7 +144,9 @@ def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink.substitute(realize), remove_all_tags, walk=True, name="bufferize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_fold_ranges+pm_push_multi, bottom_up=True, name="fold ranges")
-  tsink = graph_rewrite(tsink, pm_convert_ranges+pm_fold_ranges, bottom_up=True, name="convert ranges")
+
+  bindings = debufferize(tsink)
+  tsink = graph_rewrite(tsink.substitute(bindings), pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="convert ranges")
 
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
