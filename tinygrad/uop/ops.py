@@ -553,8 +553,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     new_srcs: list[UOp] = [UOp.const(x) if isinstance(x, int) else x for x in srcs if x is not None]
     if len(new_srcs) == 1 and new_srcs[0].op is Ops.CONST and self.op is Ops.STACK: return self.src[new_srcs[0].val]
     return UOp(Ops.INDEX, src=(self,)+tuple(new_srcs), **kwargs)
-  def stage(self, in_rngs:tuple[UOp, ...], out_rngs:tuple[UOp, ...], **kwargs):
-    return UOp(Ops.STAGE, src=(self.index(*out_rngs), *in_rngs), **kwargs)
   def __getitem__(self, idx):
     # buffers index into INDEX UOps (scalar lookup); everything else uses the shared mixin view path
     if self.addrspace in (None, AddrSpace.ALU) or self.device is not None: return super(UOp, self).__getitem__(idx)

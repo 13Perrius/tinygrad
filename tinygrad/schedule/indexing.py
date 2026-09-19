@@ -158,6 +158,8 @@ def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:U
   acc:sint = 1
   axes_in:list[UOp] = []
   for s,src in list(zip(out_shape, urngs.src))[::-1]:
+    #NOTE: need to think more about whether this is principled
+    # if isinstance(s, int) and src.vmin >= 0 and src.vmax >= s: src = src % s
     axes_in.append(acc*src)
     acc *= s
   combined_axes = UOp.const(0).usum(axes_in)
@@ -166,7 +168,8 @@ def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:U
     axes_out.append(combined_axes % s)
     combined_axes //= s
   # this simplify is doing a lot of heavy lifting. this is the replacement for the reshape view merging code
-  return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
+  # return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
+  return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_drop_and_clauses, bpm=pm_simplify_valid, name="reshape")
 
 # this is the definition of the movement ops
 @functools.cache
