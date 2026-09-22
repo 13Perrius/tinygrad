@@ -1,7 +1,7 @@
 #NOTE: check for dead imports
 
 from tinygrad.schedule.indexing import apply_movement_op, BufferizeOpts
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, ParamArg, to_max_shape, KernelInfo, AddrSpace, BottomUpGate
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, ParamArg, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
 from tinygrad.device import MultiBuffer, Buffer
 from tinygrad.helpers import prod, VIZ, dedup
 from tinygrad.dtype import dtypes
@@ -44,38 +44,38 @@ pm_fold_ranges = PatternMatcher([
   (UPat(Ops.INDEX, name="i"), push_ranges)
 ])
 
-def bufferize(tsink):
-  realize, consumes = {}, {tsink:0}
+def realize(tsink):
+  realized, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
     # if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and x.ndim > 0 and consumes[x] > 1):
     if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and x.ndim > 0 and (not x.dtype in dtypes.weaks) and consumes[x] > 1):
       buf = UOp.new_buffer(x.device if x.device is not None else tsink.device, prod(to_max_shape(x.shape)), x.dtype, bound=x.op is Ops.CONTIGUOUS)
-      realize[x] = buf.after(buf.view_as(x.shape, x.axis).store((x.src[0] if x.op is Ops.CONTIGUOUS else x).rtag())).view_as(x.shape, x.axis)
+      realized[x] = buf.after(buf.view_as(x.shape, x.axis).store((x.src[0] if x.op is Ops.CONTIGUOUS else x).rtag())).view_as(x.shape, x.axis)
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src):
       consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-  return realize, consumes
+  return realized, consumes
 
 debug_counts = PatternMatcher([
   (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
 ])
 
-def debufferize(tsink):
-  info, bindings = {}, {}
+def derealize(tsink):
+  info, derealized = {}, {}
   for x in tsink.toposort(enter_calls=False):
     if x in info: continue
     sbufs, sred = zip(*(info[u] for u in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(sbufs, [])), any(sred)
     if x.op is Ops.REDUCE and bufs: red = True
     elif x.op is Ops.AFTER and (bx:=x.src[0]).is_unbound:
-      if len(bufs) > 3 or red: bindings[bx] = bind_buffer(bx)
-      else: bindings[x] = x.src[1].src[1].reshape(x.shape)
-    if x.has_buffer_identity(after_ok=True) or (x.op is Ops.AFTER and x.src[0] in bindings):
+      if len(bufs) > 3 or red: derealized[bx] = bind_buffer(bx)
+      else: derealized[x] = x.src[1].src[1].reshape(x.shape)
+    if x.has_buffer_identity(after_ok=True) or (x.op is Ops.AFTER and x.src[0] in derealized):
       bufs, red = [x], False
     info[x] = (bufs, red)
-  return bindings
+  return derealized
 
 def convert_stack_to_where(i, x):
   req, rngs = i.src[1], i.src[2:]
@@ -122,22 +122,22 @@ pm_split_kernels = PatternMatcher([
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  realize, consumes = bufferize(tsink)
+  realized, consumes = realize(tsink)
 
   '''
   if VIZ:
-    counts = graph_rewrite(tsink, debug_counts, ctx=(realize, consumes), bottom_up=True)
+    counts = graph_rewrite(tsink, debug_counts, ctx=(realized, consumes), bottom_up=True)
     graph_rewrite(counts, PatternMatcher([]), name="view counts")
     tsink = graph_rewrite(tsink, remove_all_tags, name="remove tags")
   '''
 
-  tsink = graph_rewrite(tsink.substitute(realize), remove_all_tags, walk=True, name="bufferize")
+  tsink = graph_rewrite(tsink, _substitute, ctx=realized, bottom_up=True, name="realize")
+  tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="fold ranges")
 
-  bindings = debufferize(tsink)
-  # tsink = graph_rewrite(tsink.substitute(bindings), pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="convert ranges")
-  tsink = graph_rewrite(tsink.substitute(bindings), pm_fold_ranges, bottom_up=True, name="convert ranges")
+  derealized = derealize(tsink)
+  tsink = graph_rewrite(tsink, _substitute+pm_fold_ranges, ctx=derealized, bottom_up=True, name="derealize")
 
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
