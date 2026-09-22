@@ -44,38 +44,36 @@ pm_fold_ranges = PatternMatcher([
   (UPat(Ops.INDEX, name="i"), push_ranges)
 ])
 
-def realize(tsink):
-  realized, consumes = {}, {tsink:0}
+def count_consumes(tsink):
+  candidates, consumes = set(), {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    # if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and x.ndim > 0 and consumes[x] > 1):
     if x.op is Ops.CONTIGUOUS or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and x.ndim > 0 and (not x.dtype in dtypes.weaks) and consumes[x] > 1):
-      buf = UOp.new_buffer(x.device if x.device is not None else tsink.device, prod(to_max_shape(x.shape)), x.dtype, bound=x.op is Ops.CONTIGUOUS)
-      realized[x] = buf.after(buf.view_as(x.shape, x.axis).store((x.src[0] if x.op is Ops.CONTIGUOUS else x).rtag())).view_as(x.shape, x.axis)
+      candidates.add(x)
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src):
       consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-  return realized, consumes
+  return candidates, consumes
 
 debug_counts = PatternMatcher([
   (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
 ])
 
-def derealize(tsink):
-  info, derealized = {}, {}
+def realize(tsink, candidates):
+  info, realized = {}, {}
   for x in tsink.toposort(enter_calls=False):
     if x in info: continue
     sbufs, sred = zip(*(info[u] for u in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(sbufs, [])), any(sred)
     if x.op is Ops.REDUCE and bufs: red = True
-    elif x.op is Ops.AFTER and (bx:=x.src[0]).is_unbound:
-      if len(bufs) > 3 or red: derealized[bx] = bind_buffer(bx)
-      else: derealized[x] = x.src[1].src[1].reshape(x.shape)
-    if x.has_buffer_identity(after_ok=True) or (x.op is Ops.AFTER and x.src[0] in derealized):
+    if x in candidates and (len(bufs) > 3 or red or x.op is Ops.CONTIGUOUS): 
+      bx = UOp.new_buffer(tsink.device if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
+      realized[x] = bx.after(bx.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)
+    if x.has_buffer_identity(after_ok=True) or x in realized:
       bufs, red = [x], False
     info[x] = (bufs, red)
-  return derealized
+  return realized
 
 def convert_stack_to_where(i, x):
   req, rngs = i.src[1], i.src[2:]
@@ -92,9 +90,6 @@ pm_convert_ranges = PatternMatcher([
   (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="i"), convert_stack_to_where),
   (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
 ])
-
-def bind_buffer(x): 
-  return x.replace(arg=replace((p:=x.arg), buffer=(MultiBuffer if isinstance(p.device, tuple) else Buffer)(p.device, p.size, p.dtype)))
 
 pm_presplit = PatternMatcher([
   (UPat(Ops.STAGE, name="s"), lambda s: s.src[0]),
@@ -122,7 +117,8 @@ pm_split_kernels = PatternMatcher([
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  realized, consumes = realize(tsink)
+  candidates,_ = count_consumes(tsink)
+  realized = realize(tsink, candidates)
 
   '''
   if VIZ:
@@ -133,11 +129,9 @@ def run_rangeify(tsink, b):
 
   tsink = graph_rewrite(tsink, _substitute, ctx=realized, bottom_up=True, name="realize")
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
+
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="fold ranges")
-
-  derealized = derealize(tsink)
-  tsink = graph_rewrite(tsink, _substitute+pm_fold_ranges, ctx=derealized, bottom_up=True, name="derealize")
 
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
