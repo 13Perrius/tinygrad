@@ -54,7 +54,7 @@ def count_consumes(tsink):
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src):
       consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-  return candidates, consumes
+  return candidates
 
 debug_counts = PatternMatcher([
   (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
@@ -111,14 +111,11 @@ def split_kernels(s):
   s = graph_rewrite(s, pm_kernel_arg, ctx=(kernel_ctx:=(itertools.count(0), [])), bottom_up=True)
   return s.end(*s.ranges).sink(arg=KernelInfo()).call(*kernel_ctx[1])
 
-pm_split_kernels = PatternMatcher([
-  (UPat(Ops.STORE, name="s"), split_kernels)
-])
+pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  candidates,_ = count_consumes(tsink)
-  realized = realize(tsink, candidates)
+  realized = realize(tsink, count_consumes(tsink))
 
   '''
   if VIZ:
