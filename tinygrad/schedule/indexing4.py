@@ -30,18 +30,18 @@ pm_add_ranges = PatternMatcher([
 
 def compose_ranges(ind, st): return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
-def push_ranges(i):
-  if (x:=i.src[0]).op is Ops.REDUCE:
-    return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *i.src[1:]), *rr), arg=(x.arg[0], 0))
+def push_ranges(ind):
+  if (x:=ind.src[0]).op is Ops.REDUCE:
+    return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]), *rr), arg=(x.arg[0], 0))
   elif x.op in GroupOp.Elementwise:
-    rngs = i.src[1:]
+    rngs = ind.src[1:]
     return x.replace(src=tuple(u.index(*rngs) for u in x.src))
 
 pm_fold_ranges = PatternMatcher([
   (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
-  (UPat(Ops.INDEX, name="i"), push_ranges)
+  (UPat(Ops.INDEX, name="ind"), push_ranges)
 ])
 
 def count_consumes(tsink):
@@ -75,8 +75,8 @@ def realize(tsink, candidates):
     info[x] = (bufs, red)
   return realized
 
-def convert_stack_to_where(i, x):
-  req, rngs = i.src[1], i.src[2:]
+def convert_stack_to_where(ind, x):
+  req, rngs = ind.src[1], ind.src[2:]
   acc = x.src[-1].index(*rngs)
   for j in range(len(x.src)-2, -1, -1): acc = req.eq(j).where(x.src[j].index(*rngs), acc)
   return acc
@@ -87,13 +87,13 @@ def convert_pad_to_where(ind, x):
   return valid.where(x.src[0].index(*pad_rngs), UOp.const(x.dtype.const(0)))
 
 pm_convert_ranges = PatternMatcher([
-  (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="i"), convert_stack_to_where),
+  (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="ind"), convert_stack_to_where),
   (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
 ])
 
 pm_presplit = PatternMatcher([
-  (UPat(Ops.STAGE, name="s"), lambda s: s.src[0]),
-  (UPat(Ops.INDEX, name="i"), lambda i: None if i.src[0].shape else i.src[0])
+  (UPat(Ops.STAGE, name="st"), lambda st: st.src[0]),
+  (UPat(Ops.INDEX, name="ind"), lambda ind: None if ind.src[0].shape else ind.src[0])
 ])
 
 def add_arg(ctx, x):
