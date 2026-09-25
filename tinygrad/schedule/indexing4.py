@@ -44,10 +44,10 @@ def push_ranges(ind):
     return x.replace(src=tuple(u.index(*rngs) for u in x.src))
 
 pm_fold_ranges = PatternMatcher([
+  (UPat(Ops.INDEX, name="ind"), push_ranges),
+  (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
-  (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
-  (UPat(Ops.INDEX, name="ind"), push_ranges)
 ])
 
 REALIZE_OP = {Ops.CONTIGUOUS}
@@ -56,9 +56,8 @@ REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
 def count_consumes(tsink):
   candidates, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    #TODO: clean this up?  I feel like there's probably some function that subsumes the dim/weak dtype check, then r -> unremovable
-    if (r:=x.op in REALIZE_OP) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and x.ndim > 0 and (not x.dtype in dtypes.weaks) and consumes[x] > 1):
-      candidates[x] = r 
+    if (unremovable:=x.op in REALIZE_OP) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1):
+      candidates[x] = unremovable
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
@@ -66,7 +65,7 @@ def count_consumes(tsink):
       #TODO: hoist out?
       if x.op in REALIZE_OP_SRCS and not s.has_buffer_identity(after_ok=True): candidates[s.base] = True
       consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-  return candidates
+  return candidates, consumes
 
 debug_counts = PatternMatcher([
   (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
@@ -130,14 +129,15 @@ pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  realized = realize(tsink, count_consumes(tsink))
+  candidates, consumes = count_consumes(tsink)
 
-  '''
   if VIZ:
-    counts = graph_rewrite(tsink, debug_counts, ctx=(realized, consumes), bottom_up=True)
+    counts = graph_rewrite(tsink, debug_counts, ctx=(candidates, consumes), bottom_up=True)
     graph_rewrite(counts, PatternMatcher([]), name="view counts")
     tsink = graph_rewrite(tsink, remove_all_tags, name="remove tags")
-  '''
+
+  realized = realize(tsink, candidates)
+  # realized = realize(tsink, count_consumes(tsink))
 
   tsink = graph_rewrite(tsink, pm_push_multi+_substitute, ctx=realized, bottom_up=True, name="realize")
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
