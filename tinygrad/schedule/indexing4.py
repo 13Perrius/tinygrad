@@ -16,12 +16,6 @@ pm_insert_expands = PatternMatcher([
   lambda x: x.replace(src=tuple(u.expand(x.shape) if u.shape != x.shape else u for u in x.src)))
 ])
 
-def push_multi(x): 
-  for i,s in enumerate(x.src):
-    if s.op in GroupOp.Movement: return s.replace(src=(x.replace(src=(*x.src[:i], s.src[0], *x.src[i+1:])), *s.src[1:]))
-
-pm_push_multi = PatternMatcher([(UPat((Ops.MSELECT, Ops.MSTACK), name="x"), push_multi)])
-
 def substitute_ranges(ctx, x):
   if x.op is Ops.STAGE: raise BottomUpGate()
   return ctx.get(x)
@@ -50,42 +44,40 @@ pm_fold_ranges = PatternMatcher([
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
 ])
 
-REALIZE_OP = {Ops.CONTIGUOUS}
 REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
 
 def count_consumes(tsink):
-  candidates, consumes = {}, {tsink:0}
+  unremovable, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    if (unremovable:=x.op in REALIZE_OP) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1):
-      candidates[x] = unremovable
+    if (contig:=x.op is Ops.CONTIGUOUS) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1):
+      unremovable[x] = unremovable.get(x,False) or contig
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
-    for i,s in enumerate(x.src):
-      #TODO: hoist out?
-      if x.op in REALIZE_OP_SRCS and not s.has_buffer_identity(after_ok=True): candidates[s.base] = True
-      consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-  return candidates, consumes
+    for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
+    if x.op in REALIZE_OP_SRCS:
+      for s in x.src: 
+        if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: unremovable[sb] = True
+  return unremovable
 
-debug_counts = PatternMatcher([
-  (UPat(GroupOp.All, name="x"), lambda ctx, x: x.rtag(tag=ctx[1][x] if x not in ctx[0] else "REAL") if x in ctx[1] else None)
-])
+def realize(ctx, x):
+  info, dev = ctx
+  if x.op in REALIZE_OP_SRCS: 
+    info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False) 
+    return ret
+  if x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL:
+    info[x] = ([x], False)
+    return None
+  src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
+  bufs, red = dedup(sum(src_bufs, [])), any(src_red)
+  if x.op is Ops.REDUCE and bufs: red = True
+  if x.tag is not None and (x.tag or len(bufs) > 3 or red):
+    bx = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
+    info[ret] = ([ret:=bx.after(bx.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)], False)
+    return ret
+  info[x] = (bufs, red)
 
-def realize(tsink, candidates):
-  info, realized = {}, {}
-  for x in tsink.toposort(enter_calls=False):
-    if x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL: 
-      info[x] = ([x], False)
-      continue
-    sbufs, sred = zip(*(info[u] for u in x.src)) if x.src else ([], [])
-    bufs, red = dedup(sum(sbufs, [])), any(sred)
-    if x.op is Ops.REDUCE and bufs: red = True
-    if ((unremovable:=candidates.get(x)) is not None) and (len(bufs) > 3 or red or unremovable):
-      bx = UOp.new_buffer(tsink.device if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
-      realized[x] = bx.after(bx.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)
-    if x in realized: bufs, red = [x], False
-    info[x] = (bufs, red)
-  return realized
+pm_realize = PatternMatcher([(UPat(GroupOp.All, name="x"), realize)])
 
 def convert_stack_to_where(ind, x):
   req, rngs = ind.src[1], ind.src[2:]
@@ -122,24 +114,16 @@ pm_kernel_arg = PatternMatcher([
 
 def split_kernels(s):
   s = graph_rewrite(s, pm_kernel_arg, ctx=(kernel_ctx:=(itertools.count(0), [])), bottom_up=True)
-  # return s.end(*s.ranges).sink(arg=KernelInfo()).call(*kernel_ctx[1])
   return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*kernel_ctx[1])
 
 pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  candidates, consumes = count_consumes(tsink)
+  unremovable = count_consumes(tsink)
 
-  if VIZ:
-    counts = graph_rewrite(tsink, debug_counts, ctx=(candidates, consumes), bottom_up=True)
-    graph_rewrite(counts, PatternMatcher([]), name="view counts")
-    tsink = graph_rewrite(tsink, remove_all_tags, name="remove tags")
-
-  realized = realize(tsink, candidates)
-  # realized = realize(tsink, count_consumes(tsink))
-
-  tsink = graph_rewrite(tsink, pm_push_multi+_substitute, ctx=realized, bottom_up=True, name="realize")
+  tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in unremovable.items()}, bottom_up=True, name="tag candidates")
+  tsink = graph_rewrite(tsink, pm_realize, ctx=({}, tsink.device), walk=True, name="realize")
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
 
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
