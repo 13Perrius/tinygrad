@@ -14,7 +14,7 @@ from tinygrad.schedule.prepare import pm_mops
 import os
 R = int(os.getenv("R", 0))
 if R:
-  from tinygrad.schedule.indexing4 import run_rangeify
+  from tinygrad.schedule.rangeify2 import run_rangeify
 
 # creation can recurse a lot
 import sys
