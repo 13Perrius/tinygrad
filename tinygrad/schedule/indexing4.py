@@ -1,12 +1,6 @@
-#NOTE: check for dead imports
-
-from tinygrad.schedule.indexing import apply_movement_op, BufferizeOpts
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, ParamArg, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
-from tinygrad.device import MultiBuffer, Buffer
-from tinygrad.helpers import prod, VIZ, dedup
-from tinygrad.dtype import dtypes
-from dataclasses import dataclass, replace, field
-
+from tinygrad.schedule.indexing import apply_movement_op
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
+from tinygrad.helpers import prod, dedup
 import itertools 
 
 def new_ranges(shp, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shp))
@@ -16,17 +10,17 @@ pm_insert_expands = PatternMatcher([
   lambda x: x.replace(src=tuple(u.expand(x.shape) if u.shape != x.shape else u for u in x.src)))
 ])
 
+pm_add_ranges = PatternMatcher([
+  (UPat(Ops.REDUCE, src=(UPat.var("x"),), name="r"), lambda r, x: r.replace(src=(x, *new_ranges(x.shape[:r.arg[1]], ty=AxisType.REDUCE)))),
+  (UPat.var("dst").store(UPat.var("src")), 
+  lambda dst, src: UOp(Ops.STAGE, (dst.index(*(rngs:=new_ranges(dst.shape))), *rngs)).store(UOp(Ops.STAGE, (src.index(*rngs), *rngs))))
+])
+
 def substitute_ranges(ctx, x):
   if x.op is Ops.STAGE: raise BottomUpGate()
   return ctx.get(x)
 
 pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
-
-pm_add_ranges = PatternMatcher([
-  (UPat(Ops.REDUCE, src=(UPat(),), name="r"), lambda r: r.replace(src=((x:=r.src[0]), *new_ranges(x.shape[:r.arg[1]], ty=AxisType.REDUCE)))),
-  (UPat.var("dst").store(UPat.var("src")), 
-  lambda dst, src: UOp(Ops.STAGE, (dst.index(*(rngs:=new_ranges(dst.shape))), *rngs)).store(UOp(Ops.STAGE, (src.index(*rngs), *rngs))))
-])
 
 def compose_ranges(ind, st): return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
@@ -42,6 +36,22 @@ pm_fold_ranges = PatternMatcher([
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
+])
+
+def convert_stack_to_where(ind, x):
+  req, rngs = ind.src[1], ind.src[2:]
+  acc = x.src[-1].index(*rngs)
+  for j in range(len(x.src)-2, -1, -1): acc = req.eq(j).where(x.src[j].index(*rngs), acc)
+  return acc
+
+def convert_pad_to_where(ind, x):
+  pad_rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, ind.src[1:])
+  valid = UOp.const(True).uprod(*(r.get_valid() for r in pad_rngs))
+  return valid.where(x.src[0].index(*pad_rngs), UOp.const(x.dtype.const(0)))
+
+pm_convert_ranges = PatternMatcher([
+  (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="ind"), convert_stack_to_where),
+  (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
 ])
 
 REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
@@ -72,36 +82,22 @@ def realize(ctx, x):
   bufs, red = dedup(sum(src_bufs, [])), any(src_red)
   if x.op is Ops.REDUCE and bufs: red = True
   if x.tag is not None and (x.tag or len(bufs) > 3 or red):
-    bx = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
-    info[ret] = ([ret:=bx.after(bx.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)], False)
+    b = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
+    info[ret] = ([ret:=b.after(b.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)], False)
     return ret
   info[x] = (bufs, red)
 
 pm_realize = PatternMatcher([(UPat(GroupOp.All, name="x"), realize)])
 
-def convert_stack_to_where(ind, x):
-  req, rngs = ind.src[1], ind.src[2:]
-  acc = x.src[-1].index(*rngs)
-  for j in range(len(x.src)-2, -1, -1): acc = req.eq(j).where(x.src[j].index(*rngs), acc)
-  return acc
-
-def convert_pad_to_where(ind, x):
-  pad_rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, ind.src[1:])
-  valid = UOp.const(True).uprod(*(r.get_valid() for r in pad_rngs))
-  return valid.where(x.src[0].index(*pad_rngs), UOp.const(x.dtype.const(0)))
-
-pm_convert_ranges = PatternMatcher([
-  (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="ind"), convert_stack_to_where),
-  (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
-])
+def canonicalize_index(ind, x): return x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x
 
 pm_presplit = PatternMatcher([
   (UPat(Ops.STAGE, name="st"), lambda st: st.src[0]),
-  (UPat(Ops.INDEX, name="ind"), lambda ind: None if ind.src[0].shape else ind.src[0])
+  (UPat(Ops.INDEX, src=(UPat.var("x"),), name="ind", allow_any_len=True), lambda ind, x: None if x.ndim > 0 else canonicalize_index(ind, x))
 ])
 
 def add_arg(ctx, x):
-  if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.replace(arg=replace(x.arg, slot=-1)).rtag()
+  if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.rtag()
   if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
