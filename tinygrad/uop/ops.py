@@ -907,11 +907,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   def has_buffer_identity(self, after_ok=False):
     """Check if this UOp has a concrete buffer identity in the graph (RESHAPE/UNSHARD -> BUFFER chain)."""
-    # TODO: this is confusing because UOp.variable('v', 0, 1, dtypes.weakfloat) is True for jit to work, but it doesn't have a buffer
+    # TODO: does anything break if this returns False for variables?
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in {Ops.BUFFER, Ops.PARAM} and not self.is_unbound
+    return self.op in {Ops.BUFFER, Ops.PARAM} and not self.is_unbound and self.arg.addrspace is not AddrSpace.ALU
   @property
   def is_unbound(self) -> bool:
     # an unbound GLOBAL BUFFER has no storage bound yet: it's a declaration of storage (call output, scheduler temp)
