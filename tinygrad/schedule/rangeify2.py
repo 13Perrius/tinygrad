@@ -3,7 +3,7 @@ from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, 
 from tinygrad.helpers import prod, dedup
 import itertools 
 
-def new_ranges(shp, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shp))
+def new_ranges(shape, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shape))
 
 pm_insert_expands = PatternMatcher([
   (UPat(GroupOp.Binary|GroupOp.Ternary|{Ops.STORE}, name="x"), 
@@ -57,18 +57,18 @@ pm_convert_ranges = PatternMatcher([
 REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
 
 def count_consumes(tsink):
-  unremovable, consumes = {}, {tsink:0}
+  candidates, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
     if (contig:=x.op is Ops.CONTIGUOUS) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1):
-      unremovable[x] = unremovable.get(x,False) or contig
+      candidates[x] = candidates.get(x,False) or contig
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
     if x.op in REALIZE_OP_SRCS:
       for s in x.src: 
-        if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: unremovable[sb] = True
-  return unremovable
+        if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: candidates[sb] = True
+  return candidates
 
 def realize(ctx, x):
   info, dev = ctx
@@ -97,7 +97,7 @@ pm_presplit = PatternMatcher([
 ])
 
 def add_arg(ctx, x):
-  if x.op is Ops.PARAM and x.addrspace is AddrSpace.ALU: return x.rtag()
+  if x.op in {Ops.PARAM, Ops.BUFFER} and x.arg.addrspace is AddrSpace.ALU: return x.replace(op=Ops.PARAM)
   if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
@@ -109,16 +109,16 @@ pm_kernel_arg = PatternMatcher([
 ])
 
 def split_kernels(s):
-  s = graph_rewrite(s, pm_kernel_arg, ctx=(kernel_ctx:=(itertools.count(0), [])), bottom_up=True)
-  return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*kernel_ctx[1])
+  s = graph_rewrite(s, pm_kernel_arg, ctx=(split_ctx:=(itertools.count(0), [])), bottom_up=True)
+  return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*split_ctx[1])
 
 pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
 
 def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
-  unremovable = count_consumes(tsink)
+  candidates = count_consumes(tsink)
 
-  tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in unremovable.items()}, bottom_up=True, name="tag candidates")
+  tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in candidates.items()}, bottom_up=True, name="tag candidates")
   tsink = graph_rewrite(tsink, pm_realize, ctx=({}, tsink.device), walk=True, name="realize")
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
 
