@@ -1,7 +1,25 @@
-from tinygrad.schedule.indexing import apply_movement_op
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
-from tinygrad.helpers import prod, dedup
-import itertools 
+from tinygrad.schedule.indexing import _apply_reshape
+from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple
+from tinygrad.helpers import prod, dedup, argsort, getenv
+import itertools, functools
+
+@functools.cache
+def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
+  match op:
+    case Ops.SHRINK:  rngs = tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
+    case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
+    case Ops.FLIP:    rngs = tuple((-a+(s-1)) if f else a for a,s,f in zip(rngs, in_shape, arg))
+    case Ops.EXPAND:  return rngs[len(arg):]
+    case Ops.PAD:
+      rngs = tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
+        symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
+    case Ops.RESHAPE:
+      sink = UOp.sink(*rngs).simplify()
+      sub_array = {r:r.replace(src=r.src[:1], arg=(i, AxisType.PLACEHOLDER)) for i,r in enumerate(sink.ranges)}
+      return _apply_reshape(in_shape, arg, sink.substitute(sub_array)).substitute({v:k for k,v in sub_array.items()}).src
+    case _: raise RuntimeError(f"{op} is not a MovementOp")
+  return graph_rewrite(UOp.sink(*rngs), symbolic_simple, name="simplify ranges").src
 
 def new_ranges(shape, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shape))
 
@@ -128,6 +146,7 @@ def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
   #TODO: remove tags from split in post-split pass analogous to the one in r=0 rangeify, with reduce_simplify etc.?
+  # actually, maybe all of the presplit stuff should actually go in this single rewrite too?  does it actually have to occur before split?
   # something like: tsink = graph_rewrite(tsink, remove_all_tags, enter_calls=True, walk=True) works 
   return tsink
 
