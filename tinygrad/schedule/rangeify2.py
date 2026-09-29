@@ -77,8 +77,8 @@ REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
 def count_consumes(tsink):
   candidates, consumes = {}, {tsink:0}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    if (contig:=x.op is Ops.CONTIGUOUS) or (x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1):
-      candidates[x] = candidates.get(x,False) or contig
+    if x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1:
+      candidates[x] = candidates.get(x,False) 
       consumes[x] = 1
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
@@ -101,7 +101,7 @@ def realize(ctx, x):
   if x.op is Ops.REDUCE and bufs: red = True
   if x.tag is not None and (x.tag or len(bufs) > 3 or red):
     b = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
-    info[ret] = ([ret:=b.after(b.view_as(x.shape).store(x.src[0] if x.op is Ops.CONTIGUOUS else x.rtag())).view_as(x.shape)], False)
+    info[ret] = ([ret:=b.after(b.view_as(x.shape).store(x.rtag())).view_as(x.shape)], False)
     return ret
   info[x] = (bufs, red)
 
