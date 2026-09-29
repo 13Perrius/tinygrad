@@ -6,10 +6,12 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, K
 from tinygrad.uop.ops import graph_rewrite, sint, AxisType, BottomUpGate, rewrite_group
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.helpers import prod, dedup, DEBUG_RANGEIFY, VIZ, MAX_KERNEL_BUFFERS, SPEC
-from tinygrad.helpers import get_single_element
+from tinygrad.helpers import get_single_element, getenv
 from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, apply_movement_op
 from tinygrad.schedule.prepare import pm_mops
+
+if (R:=getenv("R")): from tinygrad.schedule.rangeify2 import run_rangeify
 
 # creation can recurse a lot
 import sys
@@ -351,6 +353,9 @@ split_kernels = PatternMatcher([
 def get_kernel_graph(tsink:UOp) -> UOp:
   # convert movement ops to ranges
   tsink = run_rangeify(tsink, bool(DEBUG_RANGEIFY))
+  if R: 
+    if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View kernel graph")
+    return tsink
 
   # cleanups for speed and runability
   tsink = graph_rewrite(tsink,

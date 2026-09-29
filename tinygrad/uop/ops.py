@@ -377,7 +377,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       case Ops.PYLITERAL: return None
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        R = int(os.getenv("R", 0))
+        if R:
+          return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
+        else:
+          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
@@ -894,7 +898,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @recursive_property
   def device(self) -> str|tuple[str, ...]|None:
     if self.op is Ops.PARAM: return self.arg.device
-    if self.op is Ops.STAGE: return self.src[0].device if self.arg is None else self.arg.device
     if self.op is Ops.AFTER: return self.src[0].device
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
@@ -955,11 +958,12 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def contiguous_view_offset(self) -> int|None: return None if (view := self.contiguous_view()) is None else view[1]
 
   def has_buffer_identity(self, after_ok=False):
-    """Check if this UOp has a storage identity in the graph, whether or not its buffer is bound."""
-    # TODO: this is confusing because UOp.variable('v', 0, 1, dtypes.weakfloat) is True for jit to work, but it doesn't have a buffer
+    """Check if this UOp has a concrete buffer identity in the graph (RESHAPE/UNSHARD -> BUFFER chain)."""
+    # TODO: does anything break if this returns False for variables?
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
+    if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in {Ops.BUFFER, Ops.ALLOC, Ops.PARAM}
+    return self.op in {Ops.BUFFER, Ops.ALLOC, Ops.PARAM} and self.arg.addrspace is not AddrSpace.ALU
 
   def _base_buffer_is_realized(self) -> bool:
     """Walk through AFTER chain to find if the underlying buffer is realized (has allocated memory)."""
@@ -1253,7 +1257,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def view_as(self:UOp, shape:tuple[sint, ...], axis:int|None=None) -> UOp:
     """view flat storage as the given (possibly symbolic) shape, optionally sharded on axis, the UNSHARD gives back the multiplied shape"""
     max_shape = to_max_shape(shape)
-    ret = self.reshape(max_shape) if len(shape) > 1 else self
+    ret = self.reshape(max_shape)
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 
