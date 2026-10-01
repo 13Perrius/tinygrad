@@ -1,6 +1,7 @@
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
 from tinygrad.schedule.indexing import _apply_reshape
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple
+from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import prod, dedup, argsort, getenv
 import itertools, functools
 
@@ -149,7 +150,7 @@ def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="fold ranges")
 
-  tsink = graph_rewrite(tsink, pm_presplit, walk=True, name="prepare to split kernels")
+  tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_presplit, name="simplify graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
   #TODO: remove tags from split in post-split pass analogous to the one in r=0 rangeify, with reduce_simplify etc.?
   # actually, maybe all of the presplit stuff should actually go in this single rewrite too?  does it actually have to occur before split?
