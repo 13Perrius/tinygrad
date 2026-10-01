@@ -232,6 +232,13 @@ def fold_where_closure(cond:UOp, t:UOp, f:UOp) -> UOp|None:
   if any(u.op_in_backward_slice_with_self(Ops.INDEX) for u in (cond, t, f)): return None
   return cond.where(t.substitute({cond: cond.const_like(True)}), f.substitute({cond: cond.const_like(False)}))
 
+fold_nested_where = PatternMatcher([
+  # a.where(b.where(c, d), d) -> (a & b).where(c, d)
+  (UPat.var("a").where(UPat.var("b").where(UPat.var("c"), UPat.var("d")), UPat.var("d")), lambda a,b,c,d: (a&b).where(c,d)),
+  # a.where(c, b.where(c, d)) -> (a | b).where(c, d)
+  (UPat.var("a").where(UPat.var("c"), UPat.var("b").where(UPat.var("c"), UPat.var("d"))), lambda a,b,c,d: (a|b).where(c,d)),
+])
+
 symbolic = symbolic_simple+commutative+PatternMatcher([
   # ** boolean algebra **
   # TODO: make a more general or folder like simplify_valid
@@ -253,10 +260,6 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   # in cond.where(t, f), uses of cond fold to True within t and False within f
   (UPat.var("cond", dtype=dtypes.bool).where(UPat.var("t"), UPat.var("f")), fold_where_closure),
   (UPat.var("gate").where(UPat.var("x"), 0) != 0, lambda gate,x: gate & (x != 0)),
-  # a.where(b.where(c, d), d) -> (a & b).where(c, d)
-  (UPat.var("a").where(UPat.var("b").where(UPat.var("c"), UPat.var("d")), UPat.var("d")), lambda a,b,c,d: (a&b).where(c,d)),
-  # a.where(c, b.where(c, d)) -> (a | b).where(c, d)
-  (UPat.var("a").where(UPat.var("c"), UPat.var("b").where(UPat.var("c"), UPat.var("d"))), lambda a,b,c,d: (a|b).where(c,d)),
   # alu of two where with same conds can combine, only do if true branch or false branch is const
   (UPat(GroupOp.Binary, name="alu", src=(UPat.var("c").where(UPat.var("t"), UPat.var("f")), UPat.var("c").where(UPat.var("tt"), UPat.var("ff")))), \
    lambda alu,c,t,tt,f,ff: c.where(t.alu(alu.op, tt), f.alu(alu.op, ff)) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
@@ -321,7 +324,7 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   # ranges can be subbed for CONSTs, remove them from ENDs. BACKEDGE conditions are never range selectors.
   (UPat(Ops.END, name="x"), lambda x: x.replace(src=(x.src[0],)+tuple(r for r in x.src[1:] if r.op is not Ops.CONST))),
   # the rules above key on bare CONSTs, so a redundantly committed const has to be uncast in the same fixpoint
-])+div_and_mod_symbolic+pm_uncast_const
+])+fold_nested_where+div_and_mod_symbolic+pm_uncast_const
 
 # ******** we take a small aside to "simplify_valid" to rewrite valids ********
 

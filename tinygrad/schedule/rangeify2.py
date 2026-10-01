@@ -1,15 +1,9 @@
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
 from tinygrad.schedule.indexing import _apply_reshape
-from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple
+from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, fold_nested_where
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import prod, dedup, argsort, getenv
 import itertools, functools
-
-# The extra pattern is needed for correctness during PAD conversion, since it lifts gates out of nested WHERE ops.
-pm_lift_gates = PatternMatcher([
-  (UPat.var("a").where(UPat.var("b").where(UPat.var("c"), UPat.var("d")), UPat.var("d")), lambda a,b,c,d: (a&b).where(c,d))
-])
-pm_canonicalize_ranges = symbolic_simple + pm_lift_gates
 
 @functools.cache
 def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
@@ -26,7 +20,7 @@ def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -
       sub_array = {r:r.replace(src=r.src[:1], arg=(i, AxisType.PLACEHOLDER)) for i,r in enumerate(sink.ranges)}
       return _apply_reshape(in_shape, arg, sink.substitute(sub_array)).substitute({v:k for k,v in sub_array.items()}).src
     case _: raise RuntimeError(f"{op} is not a MovementOp")
-  return graph_rewrite(UOp.sink(*rngs), pm_canonicalize_ranges, name="canonicalize ranges").src
+  return graph_rewrite(UOp.sink(*rngs), symbolic_simple+fold_nested_where, name="simplify ranges").src
 
 def new_ranges(shape, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shape))
 
