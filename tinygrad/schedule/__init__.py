@@ -5,7 +5,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import GroupOp, remove_all_tags
 from tinygrad.uop.ops import UOp, Ops, UOpMetaClass, rewrite_group, graph_rewrite, gate_kernel_sink, KernelInfo
 from tinygrad.uop.spec import type_verify, spec_tensor
-from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, pluralize, SCACHE, BASEDIR, partition, dedup, all_int, VIZ
+from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, pluralize, SCACHE, BASEDIR, partition, dedup, all_int, VIZ, getenv
 from tinygrad.helpers import diskcache_get, diskcache_put, colored
 
 # **** schedule linearizer
@@ -135,6 +135,9 @@ def lower_sink_to_linear(call:UOp) -> UOp|None:
   if sc_ret is None:
     if SPEC: type_verify(function, spec_tensor)
     # support recursive CALLs
+    if (R:=getenv("R")): 
+      import tinygrad.schedule.rangeify2
+      get_kernel_graph = tinygrad.schedule.rangeify2.get_kernel_graph
     linear = create_schedule(get_kernel_graph(prepare_rangeify(function)))
     if SCACHE: schedule_cache[cache_key] = linear
     if SCACHE >= 2: diskcache_put("schedule_cache", {"key": cache_key}, linear)

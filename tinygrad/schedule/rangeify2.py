@@ -113,6 +113,7 @@ def add_arg(ctx, x):
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
 pm_kernel = PatternMatcher([
+  #TODO: can destage here, make a note about transfer of ownership from STAGE to END.  eventually we just want END I think
   (UPat(GroupOp.All, name="x"), add_arg),
   (UPat(Ops.RANGE, name="r"), 
   lambda ctx, r: r.replace(arg=(-1 if r.arg[1] is AxisType.DEVICE else next(ctx[0]), r.arg[1])).rtag(r.arg[0]) if r.tag is None else None)
@@ -124,7 +125,7 @@ def split_kernels(s):
 
 pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
 
-def run_rangeify(tsink, b):
+def get_kernel_graph(tsink):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
   candidates = count_consumes(tsink)
 
