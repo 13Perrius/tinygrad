@@ -35,14 +35,6 @@ pm_add_ranges = PatternMatcher([
   lambda dst, src: UOp(Ops.STAGE, (dst.index(*(rngs:=new_ranges(dst.shape))), *rngs)).store(UOp(Ops.STAGE, (src.index(*rngs), *rngs))))
 ])
 
-def substitute_ranges(ctx, x):
-  if x.op is Ops.STAGE: raise BottomUpGate()
-  return ctx.get(x)
-
-pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
-
-def compose_ranges(ind, st): return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
-
 def push_ranges(ind):
   if (x:=ind.src[0]).op is Ops.REDUCE:
     return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]), *rr), arg=(x.arg[0], 0))
@@ -50,9 +42,8 @@ def push_ranges(ind):
     rngs = ind.src[1:]
     return x.replace(src=tuple(u.index(*rngs) for u in x.src))
 
-pm_fold_ranges = PatternMatcher([
+pm_push_ranges = PatternMatcher([
   (UPat(Ops.INDEX, name="ind"), push_ranges),
-  (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
 ])
@@ -142,12 +133,10 @@ def run_rangeify(tsink, b):
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
 
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
-  tsink = graph_rewrite(tsink, pm_fold_ranges+pm_convert_ranges, bottom_up=True, name="fold ranges")
+  tsink = graph_rewrite(tsink, pm_push_ranges+pm_convert_ranges, bottom_up=True, name="push ranges")
 
   tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_presplit, name="simplify graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
-  #TODO: remove tags from split in post-split pass analogous to the one in r=0 rangeify, with reduce_simplify etc.?
-  # actually, maybe all of the presplit stuff should actually go in this single rewrite too?  does it actually have to occur before split?
-  # something like: tsink = graph_rewrite(tsink, remove_all_tags, enter_calls=True, walk=True) works 
+  #TODO: remove tags?
   return tsink
 
