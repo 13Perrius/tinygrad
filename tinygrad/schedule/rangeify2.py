@@ -1,9 +1,23 @@
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
-from tinygrad.schedule.indexing import _apply_reshape
-from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, fold_nested_where
+from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, fold_nested_where, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import prod, dedup, argsort, getenv
 import itertools, functools
+
+@functools.cache
+def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
+  acc:sint = 1
+  axes_in:list[UOp] = []
+  for s,src in list(zip(out_shape, urngs.src))[::-1]:
+    axes_in.append(acc*src)
+    acc *= s
+  combined_axes = UOp.const(0).usum(axes_in)
+  axes_out:list[UOp] = []
+  for s in in_shape[::-1]:
+    axes_out.append(combined_axes % s)
+    combined_axes //= s
+  # this simplify is doing a lot of heavy lifting. this is the replacement for the reshape view merging code
+  return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
 
 @functools.cache
 def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
