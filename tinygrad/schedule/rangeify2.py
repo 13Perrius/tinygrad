@@ -112,14 +112,14 @@ def add_arg(ctx, x):
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
-pm_kernel_arg = PatternMatcher([
+pm_kernel = PatternMatcher([
   (UPat(GroupOp.All, name="x"), add_arg),
   (UPat(Ops.RANGE, name="r"), 
   lambda ctx, r: r.replace(arg=(-1 if r.arg[1] is AxisType.DEVICE else next(ctx[0]), r.arg[1])).rtag(r.arg[0]) if r.tag is None else None)
 ])
 
 def split_kernels(s):
-  s = graph_rewrite(s, pm_kernel_arg, ctx=(split_ctx:=(itertools.count(0), [])), bottom_up=True)
+  s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=(itertools.count(0), [])), bottom_up=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*split_ctx[1])
 
 pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
