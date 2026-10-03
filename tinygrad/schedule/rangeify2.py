@@ -45,8 +45,7 @@ pm_insert_expands = PatternMatcher([
 
 pm_add_ranges = PatternMatcher([
   (UPat(Ops.REDUCE, src=(UPat.var("x"),), name="r"), lambda r, x: r.replace(src=(x, *new_ranges(x.shape[:r.arg[1]], ty=AxisType.REDUCE)))),
-  (UPat.var("dst").store(UPat.var("src")), 
-  lambda dst, src: UOp(Ops.STAGE, (dst.index(*(rngs:=new_ranges(dst.shape))), *rngs)).store(UOp(Ops.STAGE, (src.index(*rngs), *rngs))))
+  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(rngs:=new_ranges(dst.shape))).store(src.index(*rngs)).end(*rngs))
 ])
 
 def push_ranges(ind):
@@ -116,7 +115,6 @@ pm_realize = PatternMatcher([(UPat(GroupOp.All, name="x"), realize)])
 def canonicalize_index(ind, x): return x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x
 
 pm_presplit = PatternMatcher([
-  (UPat(Ops.STAGE, name="st"), lambda st: st.src[0]),
   (UPat(Ops.INDEX, src=(UPat.var("x"),), name="ind", allow_any_len=True), lambda ind, x: None if x.ndim > 0 else canonicalize_index(ind, x))
 ])
 
@@ -127,7 +125,6 @@ def add_arg(ctx, x):
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
 pm_kernel = PatternMatcher([
-  #TODO: can destage here, make a note about transfer of ownership from STAGE to END.  eventually we just want END I think
   (UPat(GroupOp.All, name="x"), add_arg),
   (UPat(Ops.RANGE, name="r"), 
   lambda ctx, r: r.replace(arg=(-1 if r.arg[1] is AxisType.DEVICE else next(ctx[0]), r.arg[1])).rtag(r.arg[0]) if r.tag is None else None)
@@ -137,7 +134,7 @@ def split_kernels(s):
   s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=(itertools.count(0), [])), bottom_up=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*split_ctx[1])
 
-pm_split_kernels = PatternMatcher([(UPat(Ops.STORE, name="s"), split_kernels)])
+pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink):
   tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
@@ -152,6 +149,6 @@ def get_kernel_graph(tsink):
 
   tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_presplit, name="simplify graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
-  #TODO: remove tags?
+  #TODO: remove tags? can now do the index canonicalization thing here too
   return tsink
 
