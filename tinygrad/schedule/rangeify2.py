@@ -49,8 +49,8 @@ pm_add_ranges = PatternMatcher([
 ])
 
 def push_ranges(ind):
-  if (x:=ind.src[0]).op is Ops.REDUCE:
-    return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]), *rr), arg=(x.arg[0], 0))
+  if (x:=ind.src[0]).op is Ops.CONST: return x
+  elif x.op is Ops.REDUCE: return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]), *rr), arg=(x.arg[0], 0))
   elif x.op in GroupOp.Elementwise:
     rngs = ind.src[1:]
     return x.replace(src=tuple(u.index(*rngs) for u in x.src))
@@ -112,10 +112,8 @@ def realize(ctx, x):
 
 pm_realize = PatternMatcher([(UPat(GroupOp.All, name="x"), realize)])
 
-def canonicalize_index(ind, x): return x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x
-
-pm_presplit = PatternMatcher([
-  (UPat(Ops.INDEX, src=(UPat.var("x"),), name="ind", allow_any_len=True), lambda ind, x: None if x.ndim > 0 else canonicalize_index(ind, x))
+pm_canonicalize_index = PatternMatcher([
+  (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
 ])
 
 def add_arg(ctx, x):
@@ -147,8 +145,8 @@ def get_kernel_graph(tsink):
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_push_ranges+pm_convert_ranges, bottom_up=True, name="push ranges")
 
-  tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_presplit, name="simplify graph")
+  tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_canonicalize_index, name="simplify graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
-  #TODO: remove tags? can now do the index canonicalization thing here too
+  tsink = graph_rewrite(tsink, remove_all_tags, walk=True, enter_calls=True)
   return tsink
 
