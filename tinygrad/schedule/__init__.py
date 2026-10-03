@@ -137,6 +137,7 @@ def lower_sink_to_linear(call:UOp) -> UOp|None:
     # support recursive CALLs
     if (R:=getenv("R")): 
       import tinygrad.schedule.rangeify2
+      global get_kernel_graph
       get_kernel_graph = tinygrad.schedule.rangeify2.get_kernel_graph
     linear = create_schedule(get_kernel_graph(prepare_rangeify(function)))
     if SCACHE: schedule_cache[cache_key] = linear
