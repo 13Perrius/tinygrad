@@ -77,7 +77,7 @@ pm_convert_ranges = PatternMatcher([
   (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
 ])
 
-REALIZE_OP_SRCS = {Ops.MSELECT, Ops.MSTACK}
+MULTI_OPS = {Ops.MSELECT, Ops.MSTACK}
 
 def count_consumes(tsink):
   candidates, consumes = {}, {tsink:0}
@@ -88,14 +88,14 @@ def count_consumes(tsink):
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-    if x.op in REALIZE_OP_SRCS:
+    if x.op in MULTI_OPS:
       for s in x.src: 
         if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: candidates[sb] = True
   return candidates
 
 def realize(ctx, x):
   info, dev = ctx
-  if x.op in REALIZE_OP_SRCS: 
+  if x.op in MULTI_OPS: 
     info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False) 
     return ret
   if x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL:
