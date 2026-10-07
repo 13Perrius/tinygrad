@@ -91,7 +91,6 @@ def count_consumes(tsink):
     # These srcs must be kernelized.  MSTACK/MSELECT srcs drop their views.
     if x.op in MULTI_OPS:
       for s in x.src: 
-        # if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: candidates[sb] = True
         if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
   return candidates
 
@@ -107,11 +106,8 @@ def kernelize(ctx, x):
   bufs, red = dedup(sum(src_bufs, [])), any(src_red)
   if x.op is Ops.REDUCE and bufs: red = True
   if x.tag is not None and (x.tag or len(bufs) > 3 or red):
-    b = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
-    info[ret] = ([ret:=b.after(b.view_as(x.shape).store(x.rtag())).view_as(x.shape)], False)
-    #TODO: this should be alloc, can drop the view_as on the buffer id op as well
-    # a = UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)
-    # info[ret] = ([ret:=a.base.after(a.store(x.rtag())).view_as(x.shape)], False)
+    a = UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)
+    info[ret] = ([ret:=a.base.after(a.store(x.rtag())).view_as(x.shape)], False)
     return ret
   info[x] = (bufs, red)
 
