@@ -92,6 +92,9 @@ def count_consumes(tsink):
     if x.op in MULTI_OPS:
       for s in x.src: 
         if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
+    elif x.op is Ops.CALL:
+      for s in x.src[1:]: 
+        if not (s.has_buffer_identity(after_ok=True) or s.is_variable): candidates[s] = True
   return candidates
 
 def kernelize(ctx, x):
@@ -118,6 +121,7 @@ pm_canonicalize_index = PatternMatcher([
 ])
 
 def add_arg(ctx, x):
+  #TODO: can this just be an is_variable check now?
   if x.op in {Ops.PARAM, Ops.BUFFER} and x.arg.addrspace is AddrSpace.ALU: return x.replace(op=Ops.PARAM)
   if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
   ctx[1].append(x)
