@@ -88,12 +88,14 @@ def count_consumes(tsink):
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
+    # These srcs must be kernelized.  MSTACK/MSELECT srcs drop their views.
     if x.op in MULTI_OPS:
       for s in x.src: 
-        if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: candidates[sb] = True
+        # if not (sb:=s.base).has_buffer_identity(after_ok=True) and not sb.is_virtual: candidates[sb] = True
+        if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
   return candidates
 
-def realize(ctx, x):
+def kernelize(ctx, x):
   info, dev = ctx
   if x.op in MULTI_OPS: 
     info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False) 
@@ -107,10 +109,13 @@ def realize(ctx, x):
   if x.tag is not None and (x.tag or len(bufs) > 3 or red):
     b = UOp.new_buffer(dev if x.device is None else x.device, prod(to_max_shape(x.shape)), x.dtype)
     info[ret] = ([ret:=b.after(b.view_as(x.shape).store(x.rtag())).view_as(x.shape)], False)
+    #TODO: this should be alloc, can drop the view_as on the buffer id op as well
+    # a = UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)
+    # info[ret] = ([ret:=a.base.after(a.store(x.rtag())).view_as(x.shape)], False)
     return ret
   info[x] = (bufs, red)
 
-pm_realize = PatternMatcher([(UPat(GroupOp.All, name="x"), realize)])
+pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
 
 pm_canonicalize_index = PatternMatcher([
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
@@ -139,7 +144,7 @@ def get_kernel_graph(tsink):
   candidates = count_consumes(tsink)
 
   tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in candidates.items()}, bottom_up=True, name="tag candidates")
-  tsink = graph_rewrite(tsink, pm_realize, ctx=({}, tsink.device), walk=True, name="realize")
+  tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
 
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
