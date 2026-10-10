@@ -121,8 +121,6 @@ pm_canonicalize_index = PatternMatcher([
 ])
 
 def add_arg(ctx, x):
-  #TODO: can this just be an is_variable check now?
-  if x.op in {Ops.PARAM, Ops.BUFFER} and x.arg.addrspace is AddrSpace.ALU: return x.replace(op=Ops.PARAM)
   if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
