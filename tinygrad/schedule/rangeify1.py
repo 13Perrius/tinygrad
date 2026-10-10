@@ -140,7 +140,7 @@ def split_kernels(s):
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink):
-  tsink = graph_rewrite(tsink, pm_insert_expands, name="insert expands")
+  tsink = graph_rewrite(tsink, pm_insert_expands, walk=True, name="insert expands")
   candidates = count_consumes(tsink)
 
   tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in candidates.items()}, bottom_up=True, name="tag candidates")
