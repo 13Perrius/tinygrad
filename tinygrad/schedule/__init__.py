@@ -86,7 +86,9 @@ from tinygrad.schedule.memory import memory_plan_rewrite
 from tinygrad.engine.realize import capturing, pm_flatten_linear
 from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
-if getenv("R"):
+if (R:=getenv("R")) == 1:
+  from tinygrad.schedule.rangeify1 import get_kernel_graph
+elif R == 2:
   from tinygrad.schedule.rangeify2 import get_kernel_graph
 else:
   from tinygrad.schedule.rangeify import get_kernel_graph

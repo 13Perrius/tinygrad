@@ -375,6 +375,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         return _broadcast_shape(*input_shapes) if input_shapes else None
       case Ops.CUSTOM_FUNCTION: return None
       case Ops.PYLITERAL: return None
+      #TODO: fix
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
         R = int(os.getenv("R", 0))
