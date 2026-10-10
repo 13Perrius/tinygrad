@@ -110,7 +110,7 @@ def kernelize(ctx, x):
   if x.op is Ops.REDUCE and bufs: red = True
   if x.tag is not None and (x.tag or len(bufs) > 3 or red):
     a = UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)
-    info[ret] = ([ret:=a.base.after(a.store(x.rtag())).view_as(x.shape)], False)
+    info[ret] = ([ret:=a.base.after(a.store(x.rtag(None))).view_as(x.shape)], False)
     return ret
   info[x] = (bufs, red)
 
@@ -145,7 +145,6 @@ def get_kernel_graph(tsink):
 
   tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in candidates.items()}, bottom_up=True, name="tag candidates")
   tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
-  tsink = graph_rewrite(tsink, remove_all_tags, walk=True)
 
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_push_ranges+pm_convert_ranges, bottom_up=True, name="push ranges")
