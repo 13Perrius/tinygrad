@@ -92,7 +92,7 @@ def count_consumes(tsink):
     if x.op in MULTI_OPS:
       for s in x.src: 
         if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
-    elif x.op is Ops.CALL:
+    elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
       for s in x.src[1:]: 
         if not (s.has_buffer_identity(after_ok=True) or s.is_variable): candidates[s] = True
   return candidates
