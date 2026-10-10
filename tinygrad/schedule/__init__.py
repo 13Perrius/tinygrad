@@ -86,7 +86,10 @@ from tinygrad.schedule.memory import memory_plan_rewrite
 from tinygrad.engine.realize import capturing, pm_flatten_linear
 from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
-from tinygrad.schedule.rangeify import get_kernel_graph
+if getenv("R"):
+  from tinygrad.schedule.rangeify2 import get_kernel_graph
+else:
+  from tinygrad.schedule.rangeify import get_kernel_graph
 from tinygrad.helpers import CAPTURING
 from tinygrad.uop.ops import PatternMatcher, UPat
 
@@ -135,10 +138,6 @@ def lower_sink_to_linear(call:UOp) -> UOp|None:
   if sc_ret is None:
     if SPEC: type_verify(function, spec_tensor)
     # support recursive CALLs
-    if (R:=getenv("R")): 
-      import tinygrad.schedule.rangeify2
-      global get_kernel_graph
-      get_kernel_graph = tinygrad.schedule.rangeify2.get_kernel_graph
     linear = create_schedule(get_kernel_graph(prepare_rangeify(function)))
     if SCACHE: schedule_cache[cache_key] = linear
     if SCACHE >= 2: diskcache_put("schedule_cache", {"key": cache_key}, linear)
