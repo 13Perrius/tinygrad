@@ -88,7 +88,7 @@ def count_consumes(tsink):
     if x.op is Ops.STORE: consumes[x] = 1
     if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
     for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
-    # These srcs must be kernelized.  MSTACK/MSELECT srcs drop their views.
+    # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
     if x.op in MULTI_OPS:
       for s in x.src: 
         if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
