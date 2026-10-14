@@ -681,7 +681,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if isinstance(arg, Ops): arg = (arg, 0)
     return UOp(Ops.REDUCE, src=(self,)+src, arg=arg, **kwargs)
 
+  #TODO: remove bufferize
   def bufferize(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
+  def stage(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def allreduce(self, op, device:str|tuple[str, ...]):
     assert isinstance(self.device, tuple), f"allreduce must be on tuple {self.device} isn't"
     return UOp(Ops.ALLREDUCE, src=(self,), arg=(op, device))

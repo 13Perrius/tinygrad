@@ -1,8 +1,8 @@
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, to_max_shape, KernelInfo, AddrSpace, BottomUpGate, _substitute
+import itertools, functools
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, KernelInfo, _substitute
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, fold_nested_where, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import prod, dedup, argsort, getenv
-import itertools, functools
+from tinygrad.helpers import dedup, argsort
 
 @functools.cache
 def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
