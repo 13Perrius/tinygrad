@@ -37,7 +37,7 @@ def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -
     case _: raise RuntimeError(f"{op} is not a MovementOp")
   return graph_rewrite(UOp.sink(*rngs), symbolic_simple+fold_nested_where, name="simplify ranges").src
 
-def new_ranges(shape, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for _,sz in enumerate(shape))
+def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for _,sz in enumerate(shape))
 
 pm_insert_expands = PatternMatcher([
   (UPat(GroupOp.Binary|GroupOp.Ternary|{Ops.STORE}, name="x"), 
@@ -45,7 +45,7 @@ pm_insert_expands = PatternMatcher([
 ])
 
 pm_add_ranges = PatternMatcher([
-  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]], ty=AxisType.REDUCE), arg=r.arg)),
+  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), arg=r.arg)),
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
 ])
 
@@ -143,7 +143,7 @@ def add_arg(ctx, x):
 pm_kernel = PatternMatcher([
   (UPat(GroupOp.All, name="x"), add_arg),
   (UPat(Ops.RANGE, name="r"), 
-  lambda ctx, r: r.replace(arg=(-1 if r.arg[1] is AxisType.DEVICE else next(ctx[0]), r.arg[1])).rtag(r.arg[0]) if r.tag is None else None)
+  lambda ctx, r: r.replace(arg=(r.arg[0], -1 if r.arg[0] is AxisType.DEVICE else next(ctx[0]))).rtag(r.arg[1]) if r.tag is None else None)
 ])
 
 def split_kernels(s):

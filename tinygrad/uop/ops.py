@@ -949,7 +949,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in GroupOp.Defines and self.arg.addrspae is not AddrSpace.ALU
+    return self.op in GroupOp.Defines and self.arg.addrspace is not AddrSpace.ALU
 
   def _base_buffer_is_realized(self) -> bool:
     """Walk through AFTER chain to find if the underlying buffer is realized (has allocated memory)."""

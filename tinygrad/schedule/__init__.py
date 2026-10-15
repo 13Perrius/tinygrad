@@ -5,7 +5,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import GroupOp, remove_all_tags, UOp, Ops, UOpMetaClass, graph_rewrite, MapCtx, gate_kernel_sink, KernelInfo
 from tinygrad.uop.spec import type_verify, spec_tensor
 from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, SCACHE, BASEDIR, partition, dedup, all_int, VIZ
-from tinygrad.helpers import diskcache_get, diskcache_put, colored
+from tinygrad.helpers import diskcache_get, diskcache_put, colored, getenv
 
 # **** schedule linearizer
 
