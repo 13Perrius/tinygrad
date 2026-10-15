@@ -3,6 +3,7 @@ from tinygrad import dtypes, Variable
 from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import Ops, UOp, UPat, PatternMatcher, graph_rewrite, GroupOp, AxisType, broadcast_axes, KernelInfo
 from tinygrad.uop.symbolic import sym
+from tinygrad.codegen.simplify import pm_reduce_unparented
 from test.helpers import full_rewrite, to_uops_list
 
 simple_pm = PatternMatcher([
@@ -353,7 +354,7 @@ class TestUOpGraph(unittest.TestCase):
     c2 = UOp.range(UOp.const(250), 2, AxisType.WEAK)
     c3 = UOp.param(1, dtypes.int, 512)
     c4 = c3.index(c1)
-    c5 = UOp.range(UOp.const(240), 0, AxisType.REDUCE)
+    c5 = UOp.range(UOp.const(240), 0)
     c6 = ((c2*UOp.const(240))+c5)
     c7 = UOp.param(2, dtypes.uchar, 60000)
     c8 = c7.index(c6)
@@ -370,7 +371,7 @@ class TestUOpGraph(unittest.TestCase):
     c2 = UOp.range(UOp.const(250), 2, AxisType.WEAK)
     c3 = UOp.param(1, dtypes.int, 512)
     c4 = c3.index(c1)  # c4 is a load
-    c5 = UOp.range(UOp.const(240), 0, AxisType.REDUCE)
+    c5 = UOp.range(UOp.const(240), 0)
     c6 = ((c2*UOp.const(240))+c5)
     c7 = UOp.param(2, dtypes.uchar, 60000)
     c8 = c7.index(c6)
@@ -425,14 +426,17 @@ class TestUOpGraph(unittest.TestCase):
 
     e = UOp(Ops.NOOP).end(r)
     self.assertNotIn(r, e.ranges)
+    group = UOp.group(e, None, e)
+    self.assertIs(group, UOp(Ops.STACK).after(e, e))
+    self.assertIs(group.simplify(), UOp(Ops.STACK).after(e))
 
     a = c.after(e)
     self.assertNotIn(r, a.ranges)
 
   def test_external_call_preserves_ranges(self):
     r = UOp.range(4, 0, dtype=dtypes.int)
-    fn = UOp.custom_function("external", UOp.const(0, dtypes.uint64))
-    call = fn.call(r + 1, ret_dtype=dtypes.int)
+    fn = UOp.custom_function("external", dtype=dtypes.int)
+    call = fn.call(UOp.const(0, dtypes.uint64), r + 1)
     self.assertEqual(set(call.ranges), {r})
 
   def test_backedge_preserves_outer_range(self):
@@ -458,10 +462,19 @@ class TestReduceCollapse(unittest.TestCase):
     # Should become add of two separate reduces
     self.assertEqual(result.op, Ops.ADD)
 
+  def test_bool_reduce_unparented_keeps_dtype(self):
+    for op in (Ops.ADD, Ops.MUL):
+      self.assertIs(graph_rewrite(UOp.const(True).reduce(UOp.range(4, 0), arg=op), pm_reduce_unparented).dtype, dtypes.bool)
+
+  def test_max_reduce_unparented_empty_range(self):
+    n = Variable("n", 0, 4)
+    ret = graph_rewrite(UOp.const(1.0).reduce(UOp.range(n, 0), arg=Ops.MAX), pm_reduce_unparented)
+    self.assertEqual(ret.substitute({n: n.const_like(0)}).simplify().arg, float("-inf"))
+
   def test_reduce_shapeless_const_unroll(self):
     """a REDUCE over a shapeless CONST (e.g. x*0 folded late in codegen) must collapse before the expander"""
     out = UOp.param(0, dtypes.float, 1)
-    red = UOp.const(3.0).cast(dtypes.float).reduce(UOp.range(4, 0, AxisType.UNROLL), arg=(Ops.ADD, 0))
+    red = UOp.const(3.0).cast(dtypes.float).reduce(UOp.range(4, 0, AxisType.UPCAST), arg=(Ops.ADD, 0))
     ast = UOp.sink(out.index(UOp.const(0)).store(red)).replace(arg=KernelInfo())
     uops = full_rewrite(ast).toposort()
     self.assertNotIn(Ops.REDUCE, [u.op for u in uops])

@@ -122,7 +122,7 @@ class TestCallCodegen(unittest.TestCase):
     v = UOp.variable("external", 1, 8, dtype=dtypes.int)
     prg = to_program(p.index(0).store(v).sink(arg=KernelInfo("scalar")),
                      ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
-    self.assertEqual(prg.arg.vars[0].arg.slot, 1)
+    self.assertEqual(prg.arg.params[1].arg.slot, 1)
     linear = UOp(Ops.LINEAR, src=(prg.call(p, v.bind(2)),))
     # Slot 1 in the enclosing call must not rewrite the already-compiled program's ABI slot 1.
     resolved = resolve_linear_call(linear.call(out, UOp.variable("other", 1, 8, dtype=dtypes.int).bind(3)))
@@ -130,7 +130,7 @@ class TestCallCodegen(unittest.TestCase):
 
   def test_call_stack_pointer(self):
     slot = UOp.placeholder((1,), dtypes.uint32, addrspace=AddrSpace.REG)
-    call = UOp.custom_function("callback", UOp.const(0, dtypes.uint64)).call(slot[0], ret_dtype=dtypes.void)
+    call = UOp.custom_function("callback").call(slot[0])
     prg = to_program(call.sink(arg=KernelInfo("call_stack")), ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
     self.assertIn("(unsigned int*)((buf", prg.src[2].arg)
 
