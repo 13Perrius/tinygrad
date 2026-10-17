@@ -86,8 +86,6 @@ from tinygrad.schedule.multi import multi_pm
 from tinygrad.schedule.rangeify import get_kernel_graph as GKG_0
 from tinygrad.schedule.rangeify1 import get_kernel_graph as GKG_1
 from tinygrad.schedule.rangeify2 import get_kernel_graph as GKG_2
-from tinygrad.schedule.rangeify2_mnist import get_kernel_graph as GKG_3
-from tinygrad.schedule.rangeify2_implicit_broadcasting import get_kernel_graph as GKG_4
 
 GKG_FXNS = [GKG_0, GKG_1, GKG_2]
 get_kernel_graph = GKG_FXNS[getenv("R")]
