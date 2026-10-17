@@ -1,8 +1,7 @@
 import itertools, functools
 from enum import Enum
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, KernelInfo, BottomUpGate, _substitute, broadcast_axes
-#TODO: revert symbolic, dont need fold_nested_where anymore
-from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, fold_nested_where, pm_drop_and_clauses
+from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort
 from tinygrad.schedule.prepare import pm_gated_index
