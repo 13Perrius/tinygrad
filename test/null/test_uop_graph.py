@@ -482,10 +482,10 @@ class TestReduceCollapse(unittest.TestCase):
 
 class TestMovementOps(unittest.TestCase):
   def test_pm_mops_partial_reshape_index_removes_reshape(self):
-    from tinygrad.schedule.prepare import pm_mops
+    from tinygrad.schedule.prepare import pm_mops, pm_gated_index
     src = UOp.param(0, dtypes.float, shape=(32, 4))
     r0, r1 = UOp.range(4, 0), UOp.range(8, 1)
-    result = graph_rewrite(src.reshape((4, 8, 4)).index(r0, r1), pm_mops, name="test")
+    result = graph_rewrite(src.reshape((4, 8, 4)).index(r0, r1), pm_mops+pm_gated_index, name="test")
     self.assertEqual(result.op, Ops.INDEX)
     self.assertIs(result.src[0], src)
     self.assertEqual(result.shape, (4,))
@@ -493,9 +493,9 @@ class TestMovementOps(unittest.TestCase):
     self.assertEqual([u for u in result.toposort() if u.op is Ops.RESHAPE], [src])
 
   def test_pm_mops_partial_reshape_index_suffix_mismatch_does_nothing(self):
-    from tinygrad.schedule.prepare import pm_mops
+    from tinygrad.schedule.prepare import pm_mops, pm_gated_index
     src = UOp.param(0, dtypes.float, shape=(2, 6))
-    result = graph_rewrite(src.reshape((2, 3, 2)).index(UOp.range(2, 0)), pm_mops, name="test")
+    result = graph_rewrite(src.reshape((2, 3, 2)).index(UOp.range(2, 0)), pm_mops+pm_gated_index, name="test")
     self.assertEqual(result.op, Ops.INDEX)
     self.assertEqual(result.src[0].op, Ops.RESHAPE)
 

@@ -921,7 +921,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return s
 
   def contiguous_view(self) -> tuple[UOp, int]|None:
-    from tinygrad.schedule.prepare import pm_mops
+    from tinygrad.schedule.prepare import pm_mops, pm_gated_index
     from tinygrad.uop.symbolic import symbolic
 
     # WEBGPU and CL do not support views.
@@ -932,7 +932,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if (dev:=self.device) is not None and any(d.startswith(("WEBGPU", "CL")) for d in to_tuple(dev)): return None
 
     rng = UOp.range(self.numel(), 0)
-    out = graph_rewrite(self.flatten().index(rng), pm_mops+symbolic, name="contiguous_view_offset")
+    out = graph_rewrite(self.flatten().index(rng), pm_mops+pm_gated_index+symbolic, name="contiguous_view_offset")
     if out.op is not Ops.INDEX or len(out.src)-1 != len((b:=out.src[0]).shape): return None
     offset = (sum(i*s for i,s in zip(out.src[1:], strides_for_shape(b.shape))) - rng).ssimplify()
     if not isinstance(offset, int): return None
@@ -1240,7 +1240,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def view_as(self:UOp, shape:tuple[sint, ...], axis:int|None=None) -> UOp:
     """view flat storage as the given (possibly symbolic) shape, optionally sharded on axis, the UNSHARD gives back the multiplied shape"""
     max_shape = to_max_shape(shape)
-    ret = self.reshape(max_shape) 
+    ret = self.reshape(max_shape)
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 

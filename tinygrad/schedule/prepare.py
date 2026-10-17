@@ -73,14 +73,17 @@ def _mop_index(r:UOp, idx:UOp):
       ret = r.src[0].index(*apply_movement_op(r.op, r.src[0].shape[:src_prefix], r.shape[:len(idxs)], idxs), arg=idx.arg)
       return ret if ret.shape == idx.shape else None
 
-pm_mops = PatternMatcher([
-  # handle movement ops on INDEX
-  (UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index),
+pm_gated_index = PatternMatcher([
   # A store through a padded view gates the destination index, not its loaded value.
   (UPat.var("a").where(UPat.var("b").where(UPat.var("dst"), 0), UPat.var("pad")).store(UPat.var("val")),
    lambda a,b,dst,pad,val: (a&b).where(dst, 0).store(val) if pad.is_invalid else None),
   (UPat.var("cond").where(UPat.var("buf").index(UPat.var("idx")), 0).store(UPat.var("val")),
    lambda cond,buf,idx,val: buf.index(idx.valid(cond)).store(val)),
+])
+
+pm_mops = PatternMatcher([
+  # handle movement ops on INDEX
+  (UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index),
   # move movement ops and INDEX after AFTER
   (UPat(GroupOp.Movement|{Ops.INDEX}, name="r").after(name="a", allow_any_len=True),
    lambda r,a: UOp(r.op, src=(a.replace(src=(r.src[0],)+a.src[1:]),)+r.src[1:], arg=r.arg)),
@@ -276,7 +279,7 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 def prepare_rangeify(sink:UOp) -> UOp:
   # prepare for rangeify
   tsink = graph_rewrite(forward_call_outputs(sink), multi_pm, name="multi_pm")
-  tsink = graph_rewrite(tsink, pm_mops+pm_inline_calls+pm_disk_copy, name="inline calls")
+  tsink = graph_rewrite(tsink, pm_mops+pm_gated_index+pm_inline_calls+pm_disk_copy, name="inline calls")
   if OPENPILOT_HACKS: tsink = graph_rewrite(tsink, pm_fold_moved_after, init_ctx=MapCtx, name="fold moved afters")
-  tsink = graph_rewrite(tsink, pm_mops+earliest_rewrites, bottom_up=True, name="earliest rewrites")
+  tsink = graph_rewrite(tsink, pm_mops+pm_gated_index+earliest_rewrites, bottom_up=True, name="earliest rewrites")
   return tsink

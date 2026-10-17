@@ -86,8 +86,10 @@ from tinygrad.schedule.multi import multi_pm
 from tinygrad.schedule.rangeify import get_kernel_graph as GKG_0
 from tinygrad.schedule.rangeify1 import get_kernel_graph as GKG_1
 from tinygrad.schedule.rangeify2 import get_kernel_graph as GKG_2
+from tinygrad.schedule.rangeify2_mnist import get_kernel_graph as GKG_3
+from tinygrad.schedule.rangeify2_implicit_broadcasting import get_kernel_graph as GKG_4
 
-GKG_FXNS = [GKG_0, GKG_1, GKG_2]
+GKG_FXNS = [GKG_0, GKG_1, GKG_2, GKG_3, GKG_4]
 get_kernel_graph = GKG_FXNS[getenv("R")]
 
 from tinygrad.helpers import CAPTURING
@@ -169,9 +171,9 @@ def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
   if dst.device == src.device and not dst.on_disk(): return None
   from tinygrad.codegen.simplify import pm_flatten_range, pm_simplify_ranges
-  from tinygrad.schedule.prepare import pm_mops
+  from tinygrad.schedule.prepare import pm_mops, pm_gated_index
   from tinygrad.uop.symbolic import sym
-  sink = graph_rewrite(ast, sym+pm_mops+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
+  sink = graph_rewrite(ast, sym+pm_mops+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
   return call.replace(src=(sink,) + call.src[1:])
 
 pm_copy_from_store = PatternMatcher([
