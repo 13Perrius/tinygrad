@@ -1,8 +1,10 @@
 import itertools, functools
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, KernelInfo, _substitute
-from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, symbolic_simple, pm_drop_and_clauses
+from enum import Enum
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, KernelInfo, BottomUpGate, _substitute, broadcast_axes
+from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort
+from tinygrad.schedule.prepare import pm_gated_index
 
 @functools.cache
 def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
@@ -20,105 +22,101 @@ def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:U
   return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
 
 @functools.cache
-def apply_movement_op(op:Ops, in_shape:tuple, arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
+def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   match op:
-    case Ops.SHRINK:  rngs = tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
-    case Ops.FLIP:    rngs = tuple((-a+(s-1)) if f else a for a,s,f in zip(rngs, in_shape, arg))
     case Ops.EXPAND:  return rngs[len(arg):]
     case Ops.PAD:
-      rngs = tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
+      # Pad conversion should solely use the new valid, so existing ranges (which might already be gated) aren't included in the rewrite.
+      return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
         symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
-      sink = UOp.sink(*rngs).simplify()
-      sub_array = {r:r.replace(src=r.src[:1], arg=(i, AxisType.PLACEHOLDER)) for i,r in enumerate(sink.ranges)}
+      sink = UOp.sink(*rngs).simplify() # NOTE: this applies any commutative flips to the rngs early
+      sub_array = {r:r.replace(arg=(AxisType.PLACEHOLDER, i)) for i,r in enumerate(sink.ranges)}
       return _apply_reshape(in_shape, arg, sink.substitute(sub_array)).substitute({v:k for k,v in sub_array.items()}).src
+    case Ops.SHRINK:  return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
-  return graph_rewrite(UOp.sink(*rngs), symbolic_simple, name="simplify ranges").src
 
-def new_ranges(shape, rid=itertools.count(0), ty=AxisType.WEAK): return tuple(UOp.range(sz, next(rid), ty) for i,sz in enumerate(shape))
+def broadcast_ranges(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
+  if x.op not in GroupOp.Broadcastable: return rngs
+  baxes, nleft = broadcast_axes(src.shape, x.shape), len(x.shape)-len(src.shape)
+  return tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(rngs) if j >= nleft)
 
-pm_insert_expands = PatternMatcher([
-  (UPat(GroupOp.Binary|GroupOp.Ternary|{Ops.STORE}, name="x"), 
-  lambda x: x.replace(src=tuple(u.expand(x.shape) if u.shape != x.shape else u for u in x.src)))
-])
+def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
 
 pm_add_ranges = PatternMatcher([
-  (UPat(Ops.REDUCE, src=(UPat.var("x"),), name="r"), lambda r, x: r.replace(src=(x, *new_ranges(x.shape[:r.arg[1]], ty=AxisType.REDUCE)))),
-  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(rngs:=new_ranges(dst.shape))).store(src.index(*rngs)).end(*rngs))
+  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), arg=r.arg)),
+  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
 ])
 
-def push_ranges(ind):
-  if (x:=ind.src[0]).op is Ops.CONST: return x
-  elif x.op is Ops.REDUCE: return x.replace(src=(x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]), *rr), arg=(x.arg[0], 0))
-  elif x.op in GroupOp.Elementwise:
-    rngs = ind.src[1:]
-    return x.replace(src=tuple(u.index(*rngs) for u in x.src))
+def push_ranges(ind, x):
+  match x.op:
+    case Ops.CONST: return x
+    case Ops.REDUCE: return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
+    case op if op in GroupOp.Elementwise:
+      rngs = ind.src[1:]
+      return x.replace(src=tuple(u.index(*broadcast_ranges(x, u, rngs)) for u in x.src))
+    case _: return None
 
 pm_push_ranges = PatternMatcher([
-  (UPat(Ops.INDEX, name="ind"), push_ranges),
-  (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
+  (UPat.var("x").index(allow_any_len=True, name="ind"), push_ranges),
+  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
 ])
 
-def convert_stack_to_where(ind, x):
-  req, rngs = ind.src[1], ind.src[2:]
-  acc = x.src[-1].index(*rngs)
-  for j in range(len(x.src)-2, -1, -1): acc = req.eq(j).where(x.src[j].index(*rngs), acc)
-  return acc
+def stack_select(rcmp, srcs):
+  # MSB-first bit tree
+  if len(srcs) == 1: return srcs[0]
+  half = 1 << ((len(srcs)-1).bit_length()-1)
+  return (rcmp % (2*half) < half).where(stack_select(rcmp, srcs[:half]), stack_select(rcmp, srcs[half:]))
+
+def convert_stack_to_where(ind, x): return stack_select(ind.src[1], [s.index(*ind.src[2:]) for s in x.src])
 
 def convert_pad_to_where(ind, x):
-  pad_rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, ind.src[1:])
-  valid = UOp.const(True).uprod(*(r.get_valid() for r in pad_rngs))
-  return valid.where(x.src[0].index(*pad_rngs), UOp.const(x.dtype.const(0)))
+  rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, ind.src[1:])
+  valid = UOp.const(True).uprod(*(r.get_valid() for r in rngs))
+  return valid.where(x.src[0].index(*rngs), UOp.const(x.dtype.const(0)))
 
 pm_convert_ranges = PatternMatcher([
   (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="ind"), convert_stack_to_where),
   (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
 ])
 
-MULTI_OPS = {Ops.MSELECT, Ops.MSTACK}
-
-def count_consumes(tsink):
-  candidates, consumes = {}, {tsink:0}
+def tag_candidates(tsink):
+  seen: set[UOp] = set()
+  tags: dict[UOp, bool] = {}
   for x in reversed(tsink.toposort(enter_calls=False)):
-    if x.op in GroupOp.Elementwise|{Ops.REDUCE} and not x.is_virtual and consumes[x] > 1:
-      candidates[x] = candidates.get(x,False) 
-      consumes[x] = 1
-    if x.op is Ops.STORE: consumes[x] = 1
-    if x.op is Ops.EXPAND: consumes[x] *= x.max_numel() // x.src[0].max_numel()
-    for i,s in enumerate(x.src): consumes[s] = consumes.get(s,0) + (consumes[x] if x.op is not Ops.STORE or i > 0 else 0)
+    for s in x.src:
+      if s not in seen: seen.add(s)
+      elif (s.op in GroupOp.Elementwise or x.op is Ops.REDUCE) and not s.is_virtual: tags[s] = tags.get(s,False)
     # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
-    if x.op in MULTI_OPS:
-      for s in x.src: 
-        if not (sb:=s.base).has_buffer_identity(after_ok=True): candidates[sb] = True
+    if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
+      for s in x.src:
+        if not (sb:=s.base).has_buffer_identity(after_ok=True): tags[sb] = True
     elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
-      for s in x.src[1:]: 
-        if not (s.has_buffer_identity(after_ok=True) or s.is_variable): candidates[s] = True
-  return candidates
+      for s in x.src[1:]:
+        if not (s.has_buffer_identity(after_ok=True) or s.is_variable): tags[s] = True
+  return graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in tags.items()}, bottom_up=True, name="tag candidates")
 
 def kernelize(ctx, x):
-  info, dev = ctx
-  if x.op in MULTI_OPS: 
-    info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False) 
-    return ret
-  if x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL:
-    info[x] = ([x], False)
-    return None
-  src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
-  bufs, red = dedup(sum(src_bufs, [])), any(src_red)
-  if x.op is Ops.REDUCE and bufs: red = True
-  if x.tag is not None and (x.tag or len(bufs) > 3 or red):
-    a = UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)
-    info[ret] = ([ret:=a.base.after(a.store(x.rtag(None))).view_as(x.shape)], False)
-    return ret
-  info[x] = (bufs, red)
+  info, dev, ret = *ctx, x.rtag(None)
+  if ret.op is Ops.MSTACK or ret.op is Ops.MSELECT:
+    info[ret] = ([ret:=ret.replace(src=(tuple(s.base for s in ret.src))).view_as(ret.shape)], False)
+  elif ret.has_buffer_identity(after_ok=True) or ret.op is Ops.CALL:
+    info[ret] = ([ret], False)
+  else:
+    src_bufs, src_red = zip(*(info[s] for s in ret.src)) if ret.src else ([], [])
+    bufs, red = dedup(sum(src_bufs, [])), any(src_red)
+    if ret.op is Ops.REDUCE and bufs: red = True
+    if (t:=x.tag) is not None and (t or len(bufs) > 3 or red): 
+      a = UOp.alloc(ret.shape, ret.dtype, device=dev if ret.device is None else ret.device)
+      bufs, red = [ret:=a.base.after(a.store(ret)).view_as(ret.shape)], False
+    info[ret] = (bufs, red)
+  return ret
 
 pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
 
-pm_canonicalize_index = PatternMatcher([
-  (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
-])
+pm_scalar = PatternMatcher([(UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)])
 
 def add_arg(ctx, x):
   if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
@@ -127,28 +125,22 @@ def add_arg(ctx, x):
 
 pm_kernel = PatternMatcher([
   (UPat(GroupOp.All, name="x"), add_arg),
-  (UPat(Ops.RANGE, name="r"), 
-  lambda ctx, r: r.replace(arg=(-1 if r.arg[1] is AxisType.DEVICE else next(ctx[0]), r.arg[1])).rtag(r.arg[0]) if r.tag is None else None)
+  (UPat(Ops.RANGE, name="r"), lambda ctx, r: r.replace(arg=(r.arg[0], ctx[0][r.arg])).rtag() if r.tag is None else None)
 ])
 
 def split_kernels(s):
-  s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=(itertools.count(0), [])), bottom_up=True, name="kernel")
-  return s.end(*sorted(s.ranges, key=lambda r: r.tag)).sink(arg=KernelInfo()).call(*split_ctx[1])
+  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if x.op is Ops.RANGE)
+  s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=({a:i for i,a in enumerate(sorted(rargs))}, [])), bottom_up=True, name="kernel")
+  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*split_ctx[1])
 
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink):
-  tsink = graph_rewrite(tsink, pm_insert_expands, walk=True, name="insert expands")
-  candidates = count_consumes(tsink)
-
-  tsink = graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in candidates.items()}, bottom_up=True, name="tag candidates")
-  tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
-
+  tsink = graph_rewrite(tag_candidates(tsink), pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
-  tsink = graph_rewrite(tsink, pm_push_ranges+pm_convert_ranges, bottom_up=True, name="push ranges")
+  tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
 
-  tsink = graph_rewrite(tsink, symbolic+pm_reduce_simplify+pm_canonicalize_index, name="simplify graph")
+  tsink = graph_rewrite(tsink, pm_scalar+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
-  tsink = graph_rewrite(tsink, remove_all_tags, walk=True, enter_calls=True)
-  return tsink
+  return graph_rewrite(tsink, remove_all_tags, walk=True, enter_calls=True)
 
