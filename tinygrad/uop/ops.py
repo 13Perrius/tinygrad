@@ -362,14 +362,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         return _broadcast_shape(*input_shapes) if input_shapes else None
       case Ops.CUSTOM_FUNCTION: return None if self.dtype is dtypes.void else ()
       case Ops.PYLITERAL: return None
-      #TODO: fix
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        R = int(os.getenv("R", 0))
-        if R:
-          return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
-        else:
-          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
