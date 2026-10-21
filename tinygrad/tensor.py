@@ -1,12 +1,12 @@
 # inspired by https://github.com/karpathy/micrograd/blob/master/micrograd/engine.py
 from __future__ import annotations
 import time, functools, sys, inspect, pathlib, hashlib, weakref
-from typing import Any, Callable, cast, get_args, ParamSpec, TypeVar, Generic, TYPE_CHECKING
+from typing import Any, Callable, cast, get_args, ParamSpec, TypeVar, TYPE_CHECKING
 if TYPE_CHECKING: import numpy
 from tinygrad.dtype import DType, DTypeLike, dtypes, ConstType, least_upper_dtype, to_dtype, _from_np_dtype, _to_np_dtype, PyConst
-from tinygrad.helpers import all_int, getenv, fetch, Metadata, TRACEMETA, TracingKey, is_numpy_ndarray, prod
+from tinygrad.helpers import all_int, getenv, fetch, PROFILE, TracingKey, is_numpy_ndarray, prod
 from tinygrad.helpers import cpu_profile, suppress_finalizing, disable_gc, VIZ
-from tinygrad.uop.ops import UOp, Ops, sint, all_metadata, Variable, ConstLike, PatternMatcher, GroupOp, graph_rewrite, rewrite_group, pm_drop_after
+from tinygrad.uop.ops import UOp, Ops, sint, Variable, ConstLike, PatternMatcher, GroupOp, graph_rewrite, rewrite_group, pm_drop_after
 from tinygrad.mixin.rand import RandMixin
 from tinygrad.schedule import create_linear_with_vars, contiguous_mops_to_view, is_store_after
 from tinygrad.device import Buffer, canonicalize_device, is_disk_device
@@ -103,7 +103,6 @@ class Tensor(RandMixin):
   def _apply_uop(self, fxn:Callable[..., UOp], *x:Tensor, **kwargs) -> Tensor:
     srcs = (self,)+x
     new_uop: UOp = fxn(*[t.uop for t in srcs], **kwargs)
-    if TRACEMETA >= 1 and (metadata:=_METADATA.get()) is not None: all_metadata[new_uop] = (metadata,)
     # directly create the Tensor
     ret = Tensor.__new__(Tensor)
     ret.uop, ret.grad, ret.is_param = new_uop, None, True
@@ -200,8 +199,8 @@ class Tensor(RandMixin):
     sink = tensor_map.get(sink, sink)
     # Realized outputs become the storage their AFTER sequenced a store into. Compose with tensor_map before updating
     # Tensors so map values reference final storage.
-    becomes_map = {u:graph_rewrite(u.src[0], pm_drop_after, bottom_up=True, name="drop after").shrink_to(u.shape)
-                   for u in sink.toposort() if is_store_after(u)}
+    storage = graph_rewrite(stores:=UOp.sink(*(u for u in sink.toposort() if is_store_after(u))), pm_drop_after, bottom_up=True, name="drop after")
+    becomes_map = {u:s.shrink_to(u.shape) for u,s in zip(stores.src, storage.src)}
     assert not any(x in becomes_map for x in becomes_map.values())
     tensor_map = dict(zip(tensor_map, UOp.sink(*tensor_map.values()).substitute(becomes_map, walk=True).src))
     _apply_map_to_tensors(becomes_map | tensor_map, name="bufferize")
@@ -233,7 +232,7 @@ class Tensor(RandMixin):
     return self
 
   def assign(self, x:Tensor|PyConst|list|tuple) -> Tensor:
-    if self.dtype in dtypes.weaks: self.uop = self.uop.clone()
+    if self.dtype in dtypes.weaks: raise RuntimeError("cannot assign into a weak tensor; it has no storage")
     is_disk = self.uop.on_disk()
     if not isinstance(x, Tensor): x = Tensor(x, device="CPU" if is_disk else self.device, dtype=self.dtype)
     if self.uop is x.uop: return self  # a self assign is a NOOP
@@ -564,26 +563,14 @@ class Tensor(RandMixin):
 P = ParamSpec("P")
 T = TypeVar("T")
 
-# this tracks the tensor.py METADATA, contextvars.ContextVar was switched to this due to thread safety issues
-class _ContextVar(Generic[T]):
-  def __init__(self, default:T): self.state:T = default
-  def get(self) -> T: return self.state
-  def set(self, x:T) -> T:
-    ret, self.state = self.state, x
-    return ret
-_METADATA: _ContextVar[Metadata|None] = _ContextVar(default=None)
-
-def _metadata_wrapper(fn: Callable[P, T]) -> Callable[P, T]:
+def _profile_wrapper(fn: Callable[P, T]) -> Callable[P, T]:
+  @functools.wraps(fn)
   def _wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-    if TRACEMETA < 1 or _METADATA.get() is not None: return fn(*args, **kwargs)
-    token = _METADATA.set(Metadata(name=fn.__name__))
+    if not PROFILE: return fn(*args, **kwargs)
     with cpu_profile(TracingKey(fn.__name__), "USER"):
-      ret = fn(*args, **kwargs)
-    _METADATA.set(token)
-    return ret
+      return fn(*args, **kwargs)
   return _wrapper
 
-if TRACEMETA >= 1:
-  for name, fn in inspect.getmembers(Tensor, inspect.isfunction):
-    if name in ["__class__", "__del__", "__init__", "__new__", "__repr__", "backward", "sequential", "gradient"]: continue
-    setattr(Tensor, name, functools.wraps(fn)(_metadata_wrapper(fn)))
+for name, fn in inspect.getmembers(Tensor, inspect.isfunction):
+  if name in ["__class__", "__del__", "__init__", "__new__", "__repr__", "backward", "sequential", "gradient"]: continue
+  setattr(Tensor, name, _profile_wrapper(fn))

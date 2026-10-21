@@ -84,6 +84,11 @@ pm_gated_index = PatternMatcher([
 pm_mops = PatternMatcher([
   # handle movement ops on INDEX
   (UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index),
+  # A store through a padded view gates the destination index, not its loaded value.
+  (UPat.var("a").where(UPat.var("b").where(UPat.var("dst"), 0), UPat.var("pad")).store(UPat.var("val")),
+   lambda a,b,dst,pad,val: (a&b).where(dst, 0).store(val) if pad.is_invalid else None),
+  (UPat.var("cond").where(UPat.var("buf").index(UPat.var("idx")), 0).store(UPat.var("val")),
+   lambda cond,buf,idx,val: buf.index(idx.valid(cond)).store(val)),
   # move movement ops and INDEX after AFTER
   (UPat(GroupOp.Movement|{Ops.INDEX}, name="r").after(name="a", allow_any_len=True),
    lambda r,a: UOp(r.op, src=(a.replace(src=(r.src[0],)+a.src[1:]),)+r.src[1:], arg=r.arg)),
@@ -102,11 +107,13 @@ def store_hazard_boundary(s:UOp):
 def fix_store_hazard(target:UOp, src:UOp):
   if (base:=target.base) not in src.toposort(): return None
   # PERMUTE reorders indices, SHRINK can have overlapping regions when dest is also shrunk
-  unsafe = {Ops.PERMUTE} | ({Ops.SHRINK} if target.op_in_backward_slice_with_self(Ops.SHRINK) else set())
+  unsafe = {Ops.PERMUTE} | ({Ops.SHRINK} if any(u.op is Ops.SHRINK for u in target.toposort(gate=lambda u: u is not base)) else set())
+  view = target
+  while view.op is Ops.RESHAPE: view = view.src[0]
   reaches_base: dict[UOp, bool] = {}
   for s in src.toposort(gate=store_hazard_boundary):
-    reaches_base[s] = s is base or any(reaches_base.get(c) for c in s.src)
-    if reaches_base[s] and s.op in unsafe and not (s is target and s.op is Ops.SHRINK): return target.store(src.contiguous())
+    reaches_base[s] = any(c is base or reaches_base.get(c) for c in s.src)
+    if reaches_base[s] and s.op in unsafe and not (s is view and s.op is Ops.SHRINK): return target.store(src.contiguous())
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
@@ -268,7 +275,7 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   (UPat(Ops.REDUCE, name="reduce", src=(UPat.var("x"),)),
    lambda reduce,x: reduce.const_like(identity_element(reduce.arg[0], reduce.dtype)) if 0 in x.shape and 0 not in reduce.shape else None),
   # handle size 0
-  (UPat(GroupOp.All-{Ops.SINK}, name="x"), lambda x: x.const_like(0).rtag(x.tag) if x._shape is not None and 0 in x.shape else None),
+  (UPat(GroupOp.All-{Ops.SINK}, name="x"), lambda x: x.const_like(0) if x._shape is not None and 0 in x.shape else None),
 
   # remove movement ops from SINK/AFTER. TODO: should be generic
   (UPat(Ops.SINK, name="s"), lambda s: s.replace(src=tuple(walk_mop(u) for u in s.src if u.op is not Ops.NOOP))),
