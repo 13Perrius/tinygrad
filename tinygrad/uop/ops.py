@@ -1506,6 +1506,8 @@ class UPat(RandMixin):
     arg = kwargs.pop('arg', None)
     if isinstance(arg, Ops): arg = (arg, 0)
     return UPat(Ops.REDUCE, self.match_dtype, src=(self,)+src, arg=arg, **kwargs)
+  #NOTE: new syntactic sugar 
+  def stage(self, *src:UPat, **kwargs): return UPat(Ops.STAGE, src=(self,)+src, **kwargs)
   def broadcast(self, **kwargs): return UPat(Ops.STACK, self.match_dtype, src=self, **kwargs)
   def after(self, *src:UPat, **kwargs): return UPat(Ops.AFTER, self.match_dtype, (self,)+src, **kwargs)
   def call(self, *src:UPat, **kwargs): return UPat(Ops.CALL, src=(self,)+src, **kwargs)
