@@ -132,7 +132,7 @@ def count_buffers(tsink, kernvals):
 def kernelize(ctx, x):
   kernvals, allocs = ctx
   src = (s.base for s in x.src) if (multi:=x.op is Ops.MSTACK or x.op is Ops.MSELECT) else x.src
-  ret = x.replace(src=tuple((s.stage() if s in kernvals else s) if (a:=allocs.get(s)) is None else a for s in src))
+  ret = x.replace(src=tuple(a if (a:=allocs.get(s)) is not None else (s.stage() if s in kernvals else s) for s in src))
   return ret.view_as(x.shape) if multi else ret
 
 pm_kernelize = PatternMatcher([(UPat(GroupOp.All-{Ops.STORE,Ops.STAGE}, name="x"), kernelize)])
