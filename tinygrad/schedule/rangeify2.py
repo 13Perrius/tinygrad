@@ -98,7 +98,8 @@ def count_uses(tsink):
     elif x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Kernelize): use = x
     for s in x.src:
       # Broadcasting => candidacy.  TODO: need a better comment, it only overrides K=R if the other uses are all K=C as well. 
-      broadcasted = x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.base.max_numel()
+      # broadcasted = x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.base.max_numel()
+      broadcasted = x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.max_numel()
       src_use = use if not broadcasted else Kernelize.CANDIDATE
       if (curr:=uses.setdefault(s, src_use)) is not src_use and curr is not Kernelize.FORCE: uses[s] = Kernelize.RANGES
     # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
