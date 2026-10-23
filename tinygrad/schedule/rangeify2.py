@@ -89,7 +89,7 @@ def count_uses(tsink):
   uses: dict[UOp, UOp|Kernelize] = {tsink:tsink}
   kernvals: dict[UOp, Kernelize] = {}
   broadcastable: set[UOp] = GroupOp.Broadcastable|{Ops.EXPAND}
-  for x in reversed(tsink.toposort(enter_calls=False)):
+  for x in reversed(tsink.toposort()):
     # Kernels, movement ops, and REDUCE are all distinct uses.  >1 distinct uses of an elementwise op or a REDUCE => candidacy.
     if x.has_buffer_identity(after_ok=True): use = x
     elif isinstance(use:=uses[x], Kernelize) and (x.op in GroupOp.Elementwise or x.op is Ops.REDUCE or use is Kernelize.FORCE):
@@ -110,32 +110,30 @@ def count_uses(tsink):
         if not (s.has_buffer_identity(after_ok=True) or s.is_variable): uses[s] = Kernelize.FORCE
   return kernvals
 
-def count_buffers(tsink, kernvals):
-  info: dict[UOp, tuple[list[UOp], bool]] = {}
-  forced: set[UOp] = {Ops.MSTACK, Ops.MSELECT, Ops.CALL}
-  allocs: dict[UOp, UOp] = {}
-  for x in tsink.toposort():
-    if x.has_buffer_identity(after_ok=True) or x.op in forced: 
-      info[x] = ([x], False)
-      continue
+pm_insert_stages = PatternMatcher([
+  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), 
+  lambda ctx, x: x.replace(src=tuple(s if (k:=ctx.get(s)) is None else s.stage(arg=k) for s in x.src)))
+])
+
+def kernelize(ctx, x):
+  info, dev, ret = *ctx, x
+  if x.op is Ops.MSTACK or x.op is Ops.MSELECT: 
+    info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
+  elif x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL: 
+    info[ret] = ([ret:=x], False)
+  else:
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
     if x.op is Ops.REDUCE and bufs: red = True
-    if (k:=kernvals.get(x)) is not None:
-      if k is Kernelize.FORCE or len(bufs) > 3 or red: 
-        bufs, red = [x], False
-        allocs[x] = (a:=UOp.alloc(x.shape, x.dtype, device=x.device if x.device else tsink.device)).base.after(a.store(x)).view_as(x.shape)
-      elif k is not Kernelize.RANGES: del kernvals[x]
-    info[x] = (bufs, red)
-  return kernvals, allocs
+    if x.op is Ops.STAGE:
+      if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
+        ret = (a:=UOp.alloc(x.shape, x.dtype, device=x.device if x.device else dev)).base.after(a.store(x.src[0])).view_as(x.shape)
+        bufs, red = [ret], False
+      elif k is not Kernelize.RANGES: ret = x.src[0]
+    info[ret] = (bufs, red)
+  return ret
 
-def kernelize(ctx, x):
-  kernvals, allocs = ctx
-  src = (s.base for s in x.src) if (multi:=x.op is Ops.MSTACK or x.op is Ops.MSELECT) else x.src
-  ret = x.replace(src=tuple(a if (a:=allocs.get(s)) is not None else (s.stage() if s in kernvals else s) for s in src))
-  return ret.view_as(x.shape) if multi else ret
-
-pm_kernelize = PatternMatcher([(UPat(GroupOp.All-{Ops.STORE,Ops.STAGE}, name="x"), kernelize)])
+pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
 
 def substitute_ranges(ctx, x):
   if not any(r in ctx for r in x.ranges): raise BottomUpGate()
@@ -145,7 +143,7 @@ pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_
 
 def compose_ranges(st, ind): return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
-pm_canonicalize_indexing = PatternMatcher([
+pm_finalize_index = PatternMatcher([
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
 ])
@@ -167,10 +165,11 @@ def split_kernels(s):
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink):
-  tsink = graph_rewrite(tsink, pm_kernelize, ctx=count_buffers(tsink, count_uses(tsink)), bottom_up=True, name="kernelize")
+  tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
+  tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-  tsink = graph_rewrite(tsink, pm_canonicalize_indexing+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_finalize_index+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="view kernel graph")

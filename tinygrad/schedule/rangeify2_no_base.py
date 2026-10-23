@@ -1,9 +1,10 @@
 import itertools, functools
 from enum import Enum
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, remove_all_tags, KernelInfo, BottomUpGate, _substitute, broadcast_axes
+from dataclasses import dataclass, field
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, _substitute, broadcast_axes
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import dedup, argsort
+from tinygrad.helpers import dedup, argsort, VIZ
 from tinygrad.schedule.prepare import pm_gated_index
 
 @functools.cache
@@ -37,16 +38,17 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UO
     case Ops.SHRINK:  return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
 
+def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
+
 def broadcast_ranges(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if x.op not in GroupOp.Broadcastable: return rngs
   baxes, nleft = broadcast_axes(src.shape, x.shape), len(x.shape)-len(src.shape)
   return tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(rngs) if j >= nleft)
 
-def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
-
 pm_add_ranges = PatternMatcher([
-  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), arg=r.arg)),
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
+  (UPat.var("x").stage(name="st"), lambda st, x: x.index(*(r:=new_ranges(x.shape))).stage(*r)),
+  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), arg=r.arg))
 ])
 
 def push_ranges(ind, x):
@@ -55,8 +57,7 @@ def push_ranges(ind, x):
     case Ops.REDUCE: return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
     case op if op in GroupOp.Elementwise:
       rngs = ind.src[1:]
-      return x.replace(src=tuple(u.index(*broadcast_ranges(x, u, rngs)) for u in x.src))
-    case _: return None
+      return x.replace(src=tuple(s.index(*broadcast_ranges(x, s, rngs)) for s in x.src))
 
 pm_push_ranges = PatternMatcher([
   (UPat.var("x").index(allow_any_len=True, name="ind"), push_ranges),
@@ -84,21 +85,22 @@ pm_convert_ranges = PatternMatcher([
 
 Kernelize = Enum('Kernelize', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
 
-def tag_with_use(tsink):
+def count_uses(tsink):
   uses: dict[UOp, UOp|Kernelize] = {tsink:tsink}
-  tags: dict[UOp, UOp] = {}
+  kernvals: dict[UOp, Kernelize] = {}
   broadcastable: set[UOp] = GroupOp.Broadcastable|{Ops.EXPAND}
-  for x in reversed(tsink.toposort(enter_calls=False)):
-    # Kernels, movement ops, and REDUCE are all distinct uses.  >1 distinct use => candidacy.
+  for x in reversed(tsink.toposort()):
+    # Kernels, movement ops, and REDUCE are all distinct uses.  >1 distinct uses of an elementwise op or a REDUCE => candidacy.
     if x.has_buffer_identity(after_ok=True): use = x
     elif isinstance(use:=uses[x], Kernelize) and (x.op in GroupOp.Elementwise or x.op is Ops.REDUCE or use is Kernelize.FORCE):
-      tags[x] = x.rtag(use if x.max_numel() > 1 else Kernelize.CANDIDATE) 
+      kernvals[x] = use if not (use is Kernelize.RANGES and x.max_numel() == 1) else Kernelize.CANDIDATE
       use = x
     elif x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Kernelize): use = x
     for s in x.src:
-      # Broadcasting => candidacy.  This rule overrides Kernelize.RANGES because broadcasted ranges are dropped by srcs anyways.  
-      su = Kernelize.CANDIDATE if x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.max_numel() else use
-      if (curr:=uses.setdefault(s, su)) is not su and curr is not Kernelize.FORCE: uses[s] = Kernelize.RANGES
+      # Broadcasting => candidacy.  TODO: need a better comment, it only overrides K=R if the other uses are all K=C as well. 
+      broadcasted = x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.max_numel()
+      src_use = use if not broadcasted else Kernelize.CANDIDATE
+      if (curr:=uses.setdefault(s, src_use)) is not src_use and curr is not Kernelize.FORCE: uses[s] = Kernelize.RANGES
     # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
       for s in x.src:
@@ -106,22 +108,28 @@ def tag_with_use(tsink):
     elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
       for s in x.src[1:]:
         if not (s.has_buffer_identity(after_ok=True) or s.is_variable): uses[s] = Kernelize.FORCE
-  return graph_rewrite(tsink, _substitute, ctx=tags, bottom_up=True, name="tag with use")
+  return kernvals
+
+pm_insert_stages = PatternMatcher([
+  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), 
+  lambda ctx, x: x.replace(src=tuple(s if (k:=ctx.get(s)) is None else s.stage(arg=k) for s in x.src)))
+])
 
 def kernelize(ctx, x):
-  info, dev, ret = *ctx, x.rtag(None)
-  if ret.op is Ops.MSTACK or ret.op is Ops.MSELECT:
-    info[ret] = ([ret:=ret.replace(src=(tuple(s.base for s in ret.src))).view_as(ret.shape)], False)
-  elif ret.has_buffer_identity(after_ok=True) or ret.op is Ops.CALL:
-    info[ret] = ([ret], False)
+  info, dev, ret = *ctx, x
+  if x.op is Ops.MSTACK or x.op is Ops.MSELECT: 
+    info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
+  elif x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL: 
+    info[ret] = ([ret:=x], False)
   else:
-    src_bufs, src_red = zip(*(info[s] for s in ret.src)) if ret.src else ([], [])
+    src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
-    if ret.op is Ops.REDUCE and bufs: red = True
-    if isinstance(use:=x.tag, Kernelize) and (use is Kernelize.FORCE or len(bufs) > 3 or red):
-      a = UOp.alloc(ret.shape, ret.dtype, device=dev if ret.device is None else ret.device)
-      bufs, red = [ret:=a.base.after(a.store(ret)).view_as(ret.shape)], False
-    elif use is Kernelize.RANGES: ret = ret.index(*(r:=new_ranges(ret.shape))).stage(*r)
+    if x.op is Ops.REDUCE and bufs: red = True
+    if x.op is Ops.STAGE:
+      if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
+        ret = (a:=UOp.alloc(x.shape, x.dtype, device=x.device if x.device else dev)).base.after(a.store(x.src[0])).view_as(x.shape)
+        bufs, red = [ret], False
+      elif k is not Kernelize.RANGES: ret = x.src[0]
     info[ret] = (bufs, red)
   return ret
 
@@ -135,34 +143,35 @@ pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_
 
 def compose_ranges(st, ind): return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
-pm_canonicalize_indexing = PatternMatcher([
+pm_finalize_index = PatternMatcher([
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
 ])
 
 def add_arg(ctx, x):
-  if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
-  ctx[1].append(x)
-  return x.param_like(slot=len(ctx[1])-1).rtag()
+  if not x.has_buffer_identity(after_ok=True): return None
+  (args:=ctx[0]).append(x)
+  return x.param_like(slot=len(args)-1)
 
-pm_kernel = PatternMatcher([
-  (UPat(GroupOp.All, name="x"), add_arg),
-  (UPat(Ops.RANGE, name="r"), lambda ctx, r: r.replace(arg=(r.arg[0], ctx[0][r.arg])).rtag() if r.tag is None else None)
-])
+def add_range(ctx, r): return r.replace(arg=(r.arg[0], ctx[1][r.arg]))
+
+pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
 
 def split_kernels(s):
   rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if x.op is Ops.RANGE)
-  s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=({a:i for i,a in enumerate(sorted(rargs))}, [])), bottom_up=True, name="kernel")
-  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*split_ctx[1])
+  s = graph_rewrite(s, pm_kernel, ctx=((args:=[]), {arg:i for i,arg in enumerate(sorted(rargs))}), bottom_up=True, walk=True, name="kernel")
+  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*args)
 
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink):
-  tsink = graph_rewrite(tag_with_use(tsink), pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
+  tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
+  tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-
-  tsink = graph_rewrite(tsink, pm_canonicalize_indexing+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_finalize_index+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
-  return graph_rewrite(tsink, remove_all_tags, walk=True, enter_calls=True)
+
+  if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="view kernel graph")
+  return tsink
 
