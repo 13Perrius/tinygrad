@@ -482,7 +482,7 @@ class TestUOpEmpty(unittest.TestCase):
   def test_empty_like_dtype_override(self):
     u = Tensor.ones(3, 4).uop.empty_like(dtype=dtypes.int8)
     self.assertEqual((u.shape, u.dtype), ((3, 4), dtypes.int8))
-    self.assertTrue(u.has_buffer_identity())
+    self.assertTrue(u.has_buffer_identity(after_ok=False))
 
   def test_empty_like_sharded_to_single_device(self):
     # regression: sharded source, override to single device must yield full logical shape with no axis
@@ -490,7 +490,7 @@ class TestUOpEmpty(unittest.TestCase):
     for dev in ("NULL:2", ("NULL:2",)):  # singleton tuple also canonicalizes to single device
       u = t.uop.empty_like(device=dev, dtype=dtypes.int32)
       self.assertEqual((u.shape, u.device, u.dtype, u.axis), ((8, 4), "NULL:2", dtypes.int32, None))
-      self.assertTrue(u.has_buffer_identity())
+      self.assertTrue(u.has_buffer_identity(after_ok=False))
 
   def test_empty_direct_singleton_tuple_device(self):
     u = UOp.empty((4,), dtype=dtypes.float32, device=("NULL:0",))

@@ -61,7 +61,7 @@ class ElementwiseMixin(CreationMixin):
     Returns a contiguous tensor.
     """
     uop = self._uop
-    if self.dtype in dtypes.weaks or uop.op is Ops.STAGE or self.device is None or uop.has_buffer_identity(): return self
+    if self.dtype in dtypes.weaks or uop.op is Ops.STAGE or self.device is None or uop.has_buffer_identity(after_ok=False): return self
     return self._wrap_uop(uop.alu(Ops.STAGE))
 
   def contiguous_backward(self) -> Self:

@@ -748,7 +748,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   # little helpers
   def on_disk(self:UOp): return isinstance(self.device, str) and self.device.startswith("DISK")
   def on_creation_device(self:UOp): return isinstance(self.device, str) and self.device.startswith(("DISK", "NPY", "PYTHON"))
-  def needs_storage(self:UOp) -> bool: return not self.is_virtual and (self.storage_base.op is Ops.ALLOC or not self.has_buffer_identity())
+  def needs_storage(self:UOp) -> bool:
+    return not self.is_virtual and (self.storage_base.op is Ops.ALLOC or not self.has_buffer_identity(after_ok=False))
 
   # *** uop movement ops ***
 
@@ -934,7 +935,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   def contiguous_view_offset(self) -> int|None: return None if (view := self.contiguous_view()) is None else view[1]
 
-  def has_buffer_identity(self, after_ok=False):
+  def has_buffer_identity(self, after_ok=True):
     """Check if this UOp has a concrete buffer identity in the graph (RESHAPE/UNSHARD -> BUFFER chain)."""
     # TODO: does anything break if this returns False for variables?
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)

@@ -91,7 +91,7 @@ def count_uses(tsink):
   broadcastable: set[UOp] = GroupOp.Broadcastable|{Ops.EXPAND}
   for x in reversed(tsink.toposort()):
     # Kernels, movement ops, and REDUCE are all distinct uses.  >1 distinct uses of an elementwise op or a REDUCE => candidacy.
-    if x.has_buffer_identity(after_ok=True): use = x
+    if x.has_buffer_identity(): use = x
     elif isinstance(use:=uses[x], Kernelize) and (x.op in GroupOp.Elementwise or x.op is Ops.REDUCE or use is Kernelize.FORCE):
       kernvals[x] = use if not (use is Kernelize.RANGES and x.max_numel() == 1) else Kernelize.CANDIDATE
       use = x
@@ -105,10 +105,10 @@ def count_uses(tsink):
     # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
       for s in x.src:
-        if not (sb:=s.base).has_buffer_identity(after_ok=True): uses[sb] = Kernelize.FORCE
+        if not (sb:=s.base).has_buffer_identity(): uses[sb] = Kernelize.FORCE
     elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
       for s in x.src[1:]:
-        if not (s.has_buffer_identity(after_ok=True) or s.is_variable): uses[s] = Kernelize.FORCE
+        if not (s.has_buffer_identity() or s.is_variable): uses[s] = Kernelize.FORCE
   return kernvals
 
 pm_insert_stages = PatternMatcher([
@@ -120,7 +120,7 @@ def kernelize(ctx, x):
   info, dev, ret = *ctx, x
   if x.op is Ops.MSTACK or x.op is Ops.MSELECT: 
     info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
-  elif x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL: 
+  elif x.has_buffer_identity() or x.op is Ops.CALL: 
     info[ret] = ([ret:=x], False)
   else:
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
@@ -146,11 +146,11 @@ def compose_ranges(st, ind): return graph_rewrite(st.src[0], pm_substitute_range
 
 pm_finalize_index = PatternMatcher([
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
-  (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)
+  (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x)
 ])
 
 def add_arg(ctx, x):
-  if not x.has_buffer_identity(after_ok=True): return None
+  if not x.has_buffer_identity(): return None
   (args:=ctx[0]).append(x)
   return x.param_like(slot=len(args)-1)
 
@@ -159,7 +159,7 @@ def add_range(ctx, r): return r.replace(arg=(r.arg[0], ctx[1][r.arg]))
 pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
 
 def split_kernels(s):
-  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if x.op is Ops.RANGE)
+  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity()) if x.op is Ops.RANGE)
   s = graph_rewrite(s, pm_kernel, ctx=((args:=[]), {arg:i for i,arg in enumerate(sorted(rargs))}), bottom_up=True, walk=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*args)
 

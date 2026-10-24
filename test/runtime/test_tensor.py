@@ -606,7 +606,7 @@ class TestZeroShapeTensor(unittest.TestCase):
   def test_clone_deviceless_const(self):
     t = Tensor(UOp.const(2.0).cast(dtypes.float)).clone()
     np.testing.assert_equal(t.numpy(), 2.0)
-    self.assertTrue(t.uop.has_buffer_identity())
+    self.assertTrue(t.uop.has_buffer_identity(after_ok=False))
 
   def test_numpy_deviceless_const(self):
     np.testing.assert_equal(Tensor(UOp.const(2.0).cast(dtypes.float)).numpy(), 2.0)

@@ -92,17 +92,17 @@ def tag_candidates(tsink):
     # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
       for s in x.src:
-        if not (sb:=s.base).has_buffer_identity(after_ok=True): tags[sb] = True
+        if not (sb:=s.base).has_buffer_identity(): tags[sb] = True
     elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
       for s in x.src[1:]:
-        if not (s.has_buffer_identity(after_ok=True) or s.is_variable): tags[s] = True
+        if not (s.has_buffer_identity() or s.is_variable): tags[s] = True
   return graph_rewrite(tsink, _substitute, ctx={x:x.rtag(t) for x,t in tags.items()}, bottom_up=True, name="tag candidates")
 
 def kernelize(ctx, x):
   info, dev, ret = *ctx, x.rtag(None)
   if ret.op is Ops.MSTACK or ret.op is Ops.MSELECT:
     info[ret] = ([ret:=ret.replace(src=(tuple(s.base for s in ret.src))).view_as(ret.shape)], False)
-  elif ret.has_buffer_identity(after_ok=True) or ret.op is Ops.CALL:
+  elif ret.has_buffer_identity() or ret.op is Ops.CALL:
     info[ret] = ([ret], False)
   else:
     src_bufs, src_red = zip(*(info[s] for s in ret.src)) if ret.src else ([], [])
@@ -116,10 +116,10 @@ def kernelize(ctx, x):
 
 pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
 
-pm_scalar = PatternMatcher([(UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x)])
+pm_scalar = PatternMatcher([(UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x)])
 
 def add_arg(ctx, x):
-  if not (x.has_buffer_identity(after_ok=True) and x.tag is None): return None
+  if not (x.has_buffer_identity() and x.tag is None): return None
   ctx[1].append(x)
   return x.param_like(slot=len(ctx[1])-1).rtag()
 
@@ -129,7 +129,7 @@ pm_kernel = PatternMatcher([
 ])
 
 def split_kernels(s):
-  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if x.op is Ops.RANGE)
+  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity()) if x.op is Ops.RANGE)
   s = graph_rewrite(s, pm_kernel, ctx=(split_ctx:=({a:i for i,a in enumerate(sorted(rargs))}, [])), bottom_up=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*split_ctx[1])
 

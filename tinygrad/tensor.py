@@ -187,7 +187,7 @@ class Tensor(RandMixin):
         while src.op in {Ops.STAGE, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD}:
           contiguous |= src.op is Ops.STAGE
           src = src.src[0]
-        if src.is_virtual or src.on_disk() or 0 in src.shape or src.has_buffer_identity(after_ok=True): u = src
+        if src.is_virtual or src.on_disk() or 0 in src.shape or src.has_buffer_identity(): u = src
         elif src.op is Ops.AFTER and (src.src[1].op is Ops.STORE or (not contiguous and src.storage_base.has_buffer_identity())): u = src
         elif contiguous and (view := contiguous_mops_to_view(None, u, src)) is not None: u = view
         else:  # allocate fresh storage and store the compute into it
@@ -252,14 +252,14 @@ class Tensor(RandMixin):
     while views[-1].op in GroupOp.Movement|{Ops.BITCAST, Ops.DETACH}: views.append(views[-1].src[0])
     # assigning to a pending value that views no other live tensor is initialization, not a write: the whole tensor is
     # overwritten, so the pending value is dead. (a broadcast const like `const_like` is EXPAND(CONST) but views nothing)
-    if not assigned_to.has_buffer_identity() and not any(_tensor_holds(u) for u in views[1:]):
+    if not assigned_to.has_buffer_identity(after_ok=False) and not any(_tensor_holds(u) for u in views[1:]):
       self.uop = (x.uop.src[0] if x.uop.op is Ops.STAGE else x.uop).clone()
       return self
     # STORE+AFTER: STORE is the write effect (void), AFTER wraps the view for correct shape/ranging
-    ib = next((u for u in reversed(views) if u.has_buffer_identity() and (u is self.uop or _tensor_holds(u))), views[-1])
+    ib = next((u for u in reversed(views) if u.has_buffer_identity(after_ok=False) and (u is self.uop or _tensor_holds(u))), views[-1])
     if ib is not self.uop:
       # a partial write needs storage to land in: a pending value gets explicit storage (a clone)
-      target = ib if ib.has_buffer_identity(after_ok=True) else ib.clone()
+      target = ib if ib.has_buffer_identity() else ib.clone()
       store = self.uop.substitute({ib: target}, walk=True).store(x.uop)
       # view assign: the base reads "after the store into the view" (one AFTER level). replace the node under the
       # views (e.g. RESHAPE(BUFFER)) so @function's substitution catches it

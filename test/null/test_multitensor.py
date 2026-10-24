@@ -227,7 +227,7 @@ class TestMultiAxis(unittest.TestCase):
     self.assertEqual(e.shape, t.shape)
     self.assertEqual(e.device, t.device)
     self.assertEqual(e.uop.axis, 0)
-    self.assertTrue(e.uop.has_buffer_identity())
+    self.assertTrue(e.uop.has_buffer_identity(after_ok=False))
 
   def test_symbolic_reshape_shard_axis(self):
     rows = UOp.variable("rows", 1, 4).bind(3)
