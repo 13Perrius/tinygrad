@@ -1,26 +1,26 @@
+#TODO: consistent upat arg order?
 import itertools, functools
 from enum import Enum
-from dataclasses import dataclass, field
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, _substitute, broadcast_axes
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort, VIZ
 from tinygrad.schedule.prepare import pm_gated_index
 
 @functools.cache
-def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
+def apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
   acc:sint = 1
   axes_in:list[UOp] = []
-  for s,src in list(zip(out_shape, urngs.src))[::-1]:
-    axes_in.append(acc*src)
-    acc *= s
+  for sz,r in reversed(tuple(zip(out_shape, urngs.src))):
+    axes_in.append(acc*r)
+    acc *= sz
   combined_axes = UOp.const(0).usum(axes_in)
   axes_out:list[UOp] = []
-  for s in in_shape[::-1]:
-    axes_out.append(combined_axes % s)
-    combined_axes //= s
-  # this simplify is doing a lot of heavy lifting. this is the replacement for the reshape view merging code
-  return graph_rewrite(UOp.sink(*axes_out[::-1]), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
+  for sz in reversed(in_shape):
+    axes_out.append(combined_axes % sz)
+    combined_axes //= sz
+  # This simplify is doing a lot of heavy lifting. This is the replacement for the reshape view merging code.
+  return graph_rewrite(UOp.sink(*reversed(axes_out)), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
 
 @functools.cache
 def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
@@ -28,22 +28,21 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UO
     case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
     case Ops.EXPAND:  return rngs[len(arg):]
     case Ops.PAD:
-      # Pad conversion should solely use the new valid, so existing ranges (which might already be gated) aren't included in the rewrite.
+      #TODO: comment?
       return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
         symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
-      sink = UOp.sink(*rngs).simplify() # NOTE: this applies any commutative flips to the rngs early
-      sub_array = {r:r.replace(arg=(AxisType.PLACEHOLDER, i)) for i,r in enumerate(sink.ranges)}
-      return _apply_reshape(in_shape, arg, sink.substitute(sub_array)).substitute({v:k for k,v in sub_array.items()}).src
+      sink = UOp.sink(*rngs).simplify() # This applies any commutative flips to the ranges early.
+      subs = {r:r.replace(arg=(AxisType.PLACEHOLDER, i)) for i,r in enumerate(sink.ranges)}
+      return apply_reshape(in_shape, arg, sink.substitute(subs)).substitute({v:k for k,v in subs.items()}).src
     case Ops.SHRINK:  return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
 
 def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
 
-def broadcast_ranges(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
+def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if x.op not in GroupOp.Broadcastable: return rngs
-  baxes, nleft = broadcast_axes(src.shape, x.shape), len(x.shape)-len(src.shape)
-  return tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(rngs) if j >= nleft)
+  return tuple(UOp.const(0) if resolve(sz == 1, default=False) else r for sz,r in zip(s.shape, rngs[len(x.shape)-len(s.shape):]))
 
 pm_add_ranges = PatternMatcher([
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
@@ -88,26 +87,23 @@ Kernelize = Enum('Kernelize', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
 def count_uses(tsink):
   uses: dict[UOp, UOp|Kernelize] = {tsink:tsink}
   kernvals: dict[UOp, Kernelize] = {}
-  broadcastable: set[UOp] = GroupOp.Broadcastable|{Ops.EXPAND}
   for x in reversed(tsink.toposort()):
-    # Kernels, movement ops, and REDUCE are all distinct uses.  >1 distinct uses of an elementwise op or a REDUCE => candidacy.
-    if x.has_buffer_identity(): use = x
-    elif isinstance(use:=uses[x], Kernelize) and (x.op in GroupOp.Elementwise or x.op is Ops.REDUCE or use is Kernelize.FORCE):
-      kernvals[x] = use if not (use is Kernelize.RANGES and x.max_numel() == 1) else Kernelize.CANDIDATE
-      use = x
-    elif x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Kernelize): use = x
+    if (is_k:=isinstance(use:=uses[x], Kernelize)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: kernvals.setdefault(x, use)
+    if x in kernvals or x.has_buffer_identity() or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_k): use = x
     for s in x.src:
-      # Broadcasting => candidacy.  TODO: need a better comment, it only overrides K=R if the other uses are all K=C as well. 
-      broadcasted = x.op in broadcastable and use is not Kernelize.FORCE and x.max_numel() >= 2*s.max_numel()
-      src_use = use if not broadcasted else Kernelize.CANDIDATE
-      if (curr:=uses.setdefault(s, src_use)) is not src_use and curr is not Kernelize.FORCE: uses[s] = Kernelize.RANGES
-    # MSTACK, MSELECT, and custom kernel srcs must be kernelized.  MSTACK and MSELECT srcs drop their views.
+      src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
+      if (curr:=uses.setdefault(s, src_use)) is not src_use: uses[s] = Kernelize.RANGES
+    '''
+    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or ((is_call:=x.op is Ops.CALL) and isinstance(x.body.arg, KernelInfo)):
+      for s in x.src[is_call:]:
+        if not((sb:=s if is_call else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
+    '''
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
       for s in x.src:
-        if not (sb:=s.base).has_buffer_identity(): uses[sb] = Kernelize.FORCE
+        if not (sb:=s.base).has_buffer_identity(): kernvals[sb] = Kernelize.FORCE
     elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
       for s in x.src[1:]:
-        if not (s.has_buffer_identity() or s.is_variable): uses[s] = Kernelize.FORCE
+        if not (s.has_buffer_identity() or s.is_variable): kernvals[s] = Kernelize.FORCE
   return kernvals
 
 pm_insert_stages = PatternMatcher([
@@ -120,16 +116,16 @@ def kernelize(ctx, x):
   if x.op is Ops.MSTACK or x.op is Ops.MSELECT: 
     info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
   elif x.has_buffer_identity() or x.op is Ops.CALL: 
-    info[ret] = ([ret:=x], False)
+    info[ret] = ([ret], False)
   else:
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
     if x.op is Ops.REDUCE and bufs: red = True
-    if x.op is Ops.STAGE:
+    elif x.op is Ops.STAGE:
       if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
-        ret = (a:=UOp.alloc(x.shape, x.dtype, device=x.device if x.device else dev)).base.after(a.store(x.src[0])).view_as(x.shape)
+        ret = (a:=UOp.alloc(x.shape, x.dtype, device=dev if x.device is None else x.device)).base.after(a.store(x.src[0])).view_as(x.shape)
         bufs, red = [ret], False
-      elif k is not Kernelize.RANGES: ret = x.src[0]
+      elif k is not Kernelize.RANGES or x.max_numel() == 1: ret = x.src[0]
     info[ret] = (bufs, red)
   return ret
 

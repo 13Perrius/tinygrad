@@ -84,11 +84,10 @@ from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
 
 from tinygrad.schedule.rangeify import get_kernel_graph as GKG_OLD
-from tinygrad.schedule.rangeify2 import get_kernel_graph as GKG_NEW
-from tinygrad.schedule.rangeify2_no_base import get_kernel_graph as GKG_NO_BASE
-from tinygrad.schedule.rangeify2_refine import get_kernel_graph as GKG_REFINE
+from tinygrad.schedule.rangeify_new import get_kernel_graph as GKG_NEW
+from tinygrad.schedule.rangeify_new_refine import get_kernel_graph as GKG_REFINE
 
-GKG_FXNS = {"OLD":GKG_OLD, "NEW":GKG_NEW, "NO_BASE":GKG_NO_BASE, "REFINE":GKG_REFINE}
+GKG_FXNS = {"OLD":GKG_OLD, "NEW":GKG_NEW, "REFINE":GKG_REFINE}
 get_kernel_graph = GKG_FXNS[getenv("R","NEW")]
 
 from tinygrad.helpers import CAPTURING
