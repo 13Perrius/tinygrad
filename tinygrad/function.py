@@ -7,14 +7,13 @@ from tinygrad.tensor import Tensor
 from tinygrad.nn.state import get_state_dict
 
 def add_to_ctx(ctx, x:UOp):
-  if x.buf_uop in ctx[1]: return None
   ret = x.param_like(len(ctx[0]))
   ctx[0].append(x)
   return ret
 
 def is_implicit_storage(ctx, x:UOp) -> bool:
   # Variables are caller-provided values (slot -1); positional scalar params (slot >= 0) are already captured
-  return (x.is_variable and x.arg.slot == -1) or x.op is Ops.BUFFER or (x.op is Ops.ALLOC and x.arg.bind_on_realize and x.arg.slot < ctx[2])
+  return (x.is_variable and x.arg.slot == -1) or x.op is Ops.BUFFER or (x.op is Ops.ALLOC and x.arg.bind_on_realize and x.arg.slot < ctx[1])
 
 pm_ctx = PatternMatcher([
   # Capture caller-owned storage, not allocations created while tracing this function.
@@ -80,7 +79,7 @@ class _function(Generic[ReturnType]):
     # caller-owned storage left in the graph becomes implicit inputs
     num_explicit = len(call_uops)
     # uret = graph_rewrite(uret, pm_ctx, (call_uops, invalid_outputs(uret), alloc_start), bottom_up=True, name="get_implicit_inputs")
-    uret = graph_rewrite(uret, pm_ctx, (call_uops, uret, alloc_start), bottom_up=True, name="get_implicit_inputs")
+    uret = graph_rewrite(uret, pm_ctx, (call_uops, alloc_start), bottom_up=True, name="get_implicit_inputs")
     # uret = renumber_invalid_outputs(uret)
     name = getattr(self.fxn, '__qualname__', None) or type(self.fxn).__qualname__
     if not self.allow_implicit:
