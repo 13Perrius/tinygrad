@@ -155,7 +155,7 @@ class TestCustomKernel(unittest.TestCase):
     a = Tensor.full((4, 4), 3.).contiguous()
     b = Tensor.full((4, 4), 2.).contiguous()
     Tensor.realize(a, b)
-    out = Tensor.invalids(*a.shape, dtype=a.dtype)
+    out = Tensor.empty(*a.shape, dtype=a.dtype)
     out, *_ = Tensor.custom_kernel(out, a, b, fxn=custom_elementwise_add_kernel)
     compiled = compile_linear(out.schedule_linear())
     for call in compiled.src:

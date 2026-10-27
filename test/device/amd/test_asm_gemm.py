@@ -245,7 +245,7 @@ def run_mxfp8_gemm(M:int, N:int, K:int) -> None:
   b_q, b_e8, b_si = quantize_mxfp8(b)
   Tensor.realize(a_q, a_e8, a_si, b_q, b_e8, b_si)
 
-  out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a.device)
+  out = Tensor.empty(1, M, N, dtype=dtypes.bfloat16, device=a.device)
   tst = out.custom_kernel(a_q.unsqueeze(0), b_q, a_si, b_si, fxn=functools.partial(custom_hk_mxfp8_gemm, dname=a.device))[0].squeeze(0)
   ref_mx = dequant_mxfp8(a_q, a_e8) @ dequant_mxfp8(b_q, b_e8).T
   ref = a @ b.T

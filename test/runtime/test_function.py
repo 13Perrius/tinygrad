@@ -533,8 +533,8 @@ class TestFunctionTuple(unittest.TestCase):
 
     @function(precompile=True, precompile_backward=True)
     def f(a:Tensor):
-      c = Tensor.invalids(*a.shape, dtype=a.dtype, device=a.device)
-      d = Tensor.invalids(3, dtype=a.dtype, device=a.device)
+      c = Tensor.empty(*a.shape, dtype=a.dtype, device=a.device)
+      d = Tensor.empty(3, dtype=a.dtype, device=a.device)
       c, d = Tensor.custom_kernel(c, d, a, fxn=my_kernel, grad_fxn=my_grad)[:2]
       return c, d
 
@@ -557,8 +557,8 @@ class TestFunctionTuple(unittest.TestCase):
 
     @function(precompile=True, precompile_backward=True)
     def f(a:Tensor):
-      c = Tensor.invalids(*a.shape, dtype=a.dtype, device=a.device)
-      d = Tensor.invalids(*a.shape, dtype=a.dtype, device=a.device)
+      c = Tensor.empty(*a.shape, dtype=a.dtype, device=a.device)
+      d = Tensor.empty(*a.shape, dtype=a.dtype, device=a.device)
       c, d = Tensor.custom_kernel(c, d, a, fxn=my_kernel, grad_fxn=my_grad)[:2]
       return (c, d)
 
@@ -579,7 +579,7 @@ class TestFunctionTuple(unittest.TestCase):
 
     @function(precompile=True, precompile_backward=True)
     def f(a:Tensor):
-      c = Tensor.invalids(*a.shape, dtype=a.dtype, device=a.device)
+      c = Tensor.empty(*a.shape, dtype=a.dtype, device=a.device)
       c = Tensor.custom_kernel(c, a, fxn=my_kernel, grad_fxn=my_grad)[0]
       return c
 
@@ -600,7 +600,7 @@ class TestFunctionTuple(unittest.TestCase):
     np.testing.assert_allclose(a.grad.numpy(), [2., 2., 2., 2.])
 
   def test_custom_kernel_precompile_multidevice(self):
-    # a custom_kernel output placeholder (invalids) under multi-device @function(precompile=True) must return the
+    # custom kernel output storage under multi-device @function(precompile=True) must return the
     # kernel's computed result. read it back through .numpy() so the cross-device gather reads the output buffer
     devs = ("CPU:0", "CPU:1")
     def double_kernel(C:UOp, A:UOp) -> UOp:
@@ -613,18 +613,10 @@ class TestFunctionTuple(unittest.TestCase):
 
     @function(precompile=True, precompile_backward=True)
     def f(a:Tensor):
-      c = Tensor(Tensor.invalids(a.shape[0]//len(devs), a.shape[1], dtype=a.dtype, device=devs).uop.unshard(0), device=devs)
-      return Tensor.custom_kernel(c, a, fxn=double_kernel, grad_fxn=double_grad)[0]
-
-    np.testing.assert_allclose(f(a).numpy(), 14.0)
-
-    # g is f with empty output instead of invalids
-    @function(precompile=True, allow_implicit=False)
-    def g(a:Tensor):
       c = Tensor(Tensor.empty(a.shape[0]//len(devs), a.shape[1], dtype=a.dtype, device=devs).uop.unshard(0), device=devs)
       return Tensor.custom_kernel(c, a, fxn=double_kernel, grad_fxn=double_grad)[0]
 
-    np.testing.assert_allclose(g(a).numpy(), 14.0)
+    np.testing.assert_allclose(f(a).numpy(), 14.0)
 
   def test_custom_kernel_empty_is_local(self):
     def write(C:UOp, A:UOp) -> UOp:
@@ -654,8 +646,8 @@ class TestFunctionTuple(unittest.TestCase):
         f(Tensor([1., 2., 3., 4.]).contiguous().realize()).realize()
         np.testing.assert_allclose(state.numpy(), [2., 4., 6., 8.])
 
-  def test_custom_kernel_program_invalids_not_captured(self):
-    # llama FP8 kernels are PROGRAM with bare-buffer sinks (no analyzable stores), so the invalids scratch
+  def test_custom_kernel_program_call_scoped_storage_not_captured(self):
+    # llama FP8 kernels are PROGRAM with bare-buffer sinks (no analyzable stores), so the call-scoped storage
     # still must not be captured as an input -- else it is read before the kernel writes it
     renderer = Device[Device.DEFAULT].renderer
     def prog(C:UOp, A:UOp) -> UOp:
@@ -665,24 +657,13 @@ class TestFunctionTuple(unittest.TestCase):
       # Keep the compiled kernel, but hide its stores exactly as in an opaque external PROGRAM.
       return prg.replace(src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), *prg.src[2:]))
 
-    @function(precompile=True)
+    @function(precompile=True, allow_implicit=False)
     def f(a:Tensor):
-      c = Tensor.invalids(*a.shape, dtype=a.dtype, device=a.device)
+      c = Tensor.empty(*a.shape, dtype=a.dtype, device=a.device)
       return Tensor.custom_kernel(c, a, fxn=prog)[0]
 
     a = Tensor([1., 2., 3., 4.]).contiguous().realize()
     np.testing.assert_allclose(f(a).numpy(), [2., 4., 6., 8.])
-
-  def test_invalid_store_into_realized_buffer_is_captured(self):
-    # only fresh invalids() scratch is skipped; a realized buffer is a real input even if an Invalid store
-    # writes into part of it (its other elements must be preserved), so it is still captured
-    state = Tensor([10., 20., 30., 40.]).contiguous().realize()
-    @function(precompile=True, allow_implicit=True)
-    def f(a:Tensor):
-      after = state.uop.after(state.uop.shrink(((0, 2),)).store(Invalid))
-      return Tensor(after).contiguous() + a
-    out = f(Tensor([1., 1., 1., 1.]).contiguous().realize())
-    np.testing.assert_allclose(out.numpy(), [11., 21., 31., 41.])
 
   def test_custom_kernel_precompile_further_compute(self, multi=False, kernel_count:int=2):
     devs = ("CPU:0", "CPU:1")
@@ -693,7 +674,7 @@ class TestFunctionTuple(unittest.TestCase):
 
     @function(precompile=True)
     def f(a:Tensor):
-      c = Tensor.invalids(*a.uop.shard_shape, dtype=a.dtype, device=a.device)
+      c = Tensor.empty(*a.uop.shard_shape, dtype=a.dtype, device=a.device)
       if multi: c = Tensor(c.uop.unshard(a.uop.axis), device=a.device)
       c = Tensor.custom_kernel(c, a, fxn=my_kernel)[0]
       return c + 1

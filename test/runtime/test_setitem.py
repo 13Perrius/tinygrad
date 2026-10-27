@@ -259,14 +259,6 @@ class TestSetitem(unittest.TestCase):
     s2 = t.sum()
     np.testing.assert_allclose([s0.item(), s1.item(), s2.item()], [0.0, 3.0, 9.0])
 
-  def test_setitem_multiple_disjoint_on_invalid(self):
-    z = Tensor.invalids(10, dtype="int").realize()
-    z[2:5] = 2
-    z[6:7] = 3
-    z.realize()
-    self.assertListEqual(z[2:5].tolist(), [2, 2, 2])
-    self.assertListEqual(z[6:7].tolist(), [3])
-
 class TestAssignBitcast(unittest.TestCase):
   def test_assign_through_bitcast(self):
     # the dest is unrealized, so the call transform cannot fold the BITCAST into a buffer view and the STORE keeps a

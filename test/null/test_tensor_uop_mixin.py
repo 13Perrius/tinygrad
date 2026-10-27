@@ -511,8 +511,6 @@ class TestTensorUOpCreation(unittest.TestCase):
     self.assertIs(_strip_unique(Tensor.zeros(2, 3).uop), _strip_unique(UOp.zeros(2, 3)))
   def test_ones(self):
     self.assertIs(_strip_unique(Tensor.ones(2, 3).uop), _strip_unique(UOp.ones(2, 3)))
-  def test_invalids(self):
-    self.assertIs(_strip_unique(Tensor.invalids(2, 3, dtype=dtypes.int8).uop), _strip_unique(UOp.invalids((2, 3), dtype=dtypes.int8)))
   def test_empty_like(self):
     t = Tensor.empty(2, 3, dtype=dtypes.int8)
     self.assertIs(_strip_unique(t.empty_like().uop), _strip_unique(t.uop.empty_like()))
