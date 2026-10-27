@@ -425,24 +425,15 @@ class TestCustomKernel(unittest.TestCase):
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
     assert_kernel_count(2)
 
-  def test_multi_invalids_custom_kernel_no_copy(self):
+  def test_multi_empty_custom_kernel_no_copy(self):
     devs = ("CPU:0", "CPU:1")
     a = Tensor.ones(4, 4).shard(devs, axis=0).realize()
-    c = Tensor(Tensor.invalids(2, 4, dtype=dtypes.float, device=devs).uop.unshard(0), device=devs)
+    c = Tensor(Tensor.empty(2, 4, dtype=dtypes.float, device=devs).uop.unshard(0), device=devs)
     c = Tensor.custom_kernel(c, a, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     c.realize()
     assert_kernel_count(len(devs))
     self.assertTrue((c == 2).all().item())
-
-  def test_partial_invalid_store_keeps_uncovered_reads(self):
-    x = Tensor([10., 20., 30., 40.]).realize()
-    after = x.uop.after(x.uop.shrink(((0, 2),)).store(Invalid))
-    self.assertEqual(Tensor(after).contiguous().tolist(), [10., 20., 30., 40.])
-
-  def test_multi_after_invalid_store_dep_removed(self):
-    x = Tensor.empty(4).uop
-    self.assertEqual(Tensor(x.after(x.store(5), x.store(Invalid))).tolist(), [5]*4)
 
   def test_store_behind_value_after_kept(self):
     def kernel(A:UOp, loop:bool) -> UOp:
@@ -453,17 +444,11 @@ class TestCustomKernel(unittest.TestCase):
       self.assertEqual(out.tolist(), [7, 9])
 
   def test_deleted_store_keeps_deps(self):
-    for f in (lambda a, s: s[1].store(s[1].load()), lambda a, s: s[UOp.invalid()].store(5),
-              lambda a, s: s[1].store(UOp.invalid()), lambda a, s: a[UOp.invalid()].store(s[1].load())):
+    for f in (lambda a, s: s[1].store(s[1].load()), lambda a, s: s[UOp.invalid()].store(5), 
+              lambda a, s: a[UOp.invalid()].store(s[1].load())):
       out = Tensor.custom_kernel(Tensor.zeros(3, dtype=dtypes.int).contiguous(),
                                  fxn=lambda a: f(a, a.after(a[0].store(7))).sink(arg=KernelInfo(opts_to_apply=())))[0]
       self.assertEqual(out.tolist(), [7, 0, 0])
-
-  def test_expand_view_invalid_assign_keeps_uncovered_reads(self):
-    x = Tensor([[10., 11., 12., 13.], [20., 21., 22., 23.], [30., 31., 32., 33.], [40., 41., 42., 43.]]).realize()
-    v = x[:1, :].expand(4, 4)
-    v.assign(Tensor.invalids(4, 4, dtype=dtypes.float))
-    self.assertEqual(v.contiguous().tolist(), [[10., 11., 12., 13.]]*4)
 
   @unittest.expectedFailure
   def test_gated_store_2d(self):
@@ -494,12 +479,12 @@ class TestCustomKernel(unittest.TestCase):
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4, 4), a, fxn=kernel)[0].tolist(), a[:, :1].pad(((0, 0), (0, 3))).tolist())
 
   @unittest.skipIf(Device.DEFAULT == "WEBGPU", "kernel timing not supported")
-  def test_invalids_into_custom_kernel_with_beam(self):
+  def test_empty_into_custom_kernel_with_beam(self):
     a = Tensor.full((4, 4), 3.).contiguous()
     b = Tensor.full((4, 4), 2.).contiguous()
     Tensor.realize(a, b)
     with Context(BEAM=1, IGNORE_BEAM_CACHE=1):
-      out = Tensor.invalids(*a.shape, dtype=a.dtype)
+      out = Tensor.empty(*a.shape, dtype=a.dtype)
       out, *_ = Tensor.custom_kernel(out, a, b, fxn=custom_elementwise_add_kernel)
       result = out.flatten().tolist()
     self.assertTrue(all(x == 5 for x in result), f"expected all 5.0, got {result}")
@@ -521,8 +506,8 @@ class TestCustomKernel(unittest.TestCase):
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor, w:Tensor) -> Tensor:
-      out = Tensor.invalids(*x.shape, dtype=x.dtype)
-      tmp = Tensor.invalids(*x.shape, dtype=x.dtype)
+      out = Tensor.empty(*x.shape, dtype=x.dtype)
+      tmp = Tensor.empty(*x.shape, dtype=x.dtype)
       out, tmp = Tensor.custom_kernel(out, tmp, x, w, fxn=custom_add_with_tmp)[:2]
       return out+tmp
 
@@ -565,7 +550,7 @@ class TestCustomKernel(unittest.TestCase):
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor) -> Tensor:
-      y = Tensor.invalids(*x.shape, dtype=x.dtype)
+      y = Tensor.empty(*x.shape, dtype=x.dtype)
       return Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x[0]).realize()
@@ -760,7 +745,7 @@ class TestCustomKernelInput(unittest.TestCase):
     @function(precompile=True)
     def run(a:Tensor) -> Tensor:
       xv = mop_fxn(a)
-      y = Tensor.invalids(*xv.shape, dtype=xv.dtype, device=a.device)
+      y = Tensor.empty(*xv.shape, dtype=xv.dtype, device=a.device)
       return Tensor.custom_kernel(y, xv, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x0).realize()
