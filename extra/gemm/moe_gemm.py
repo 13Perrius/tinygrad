@@ -76,7 +76,7 @@ def grouped_mx_wgrad(g:Tensor, xg:Tensor, expert_off:Tensor, n_experts:int) -> T
   xT, _, x_si = transpose_quantize_mxfp8(xg.contiguous())
   dname = (g.device[0] if isinstance(g.device, tuple) else g.device).split(":")[0]
   is_multi = isinstance(g.device, tuple)
-  inv = Tensor.invalids(1, n_experts * N, K, dtype=dtypes.bfloat16, device=g.device)
+  inv = Tensor.empty(1, n_experts * N, K, dtype=dtypes.bfloat16, device=g.device)
   out = Tensor(inv.uop.unshard(0), device=g.device) if is_multi else inv
   out = Tensor.custom_kernel(out, gT, xT, g_si, x_si, expert_off,
                              fxn=functools.partial(custom_hk_grouped_mxfp8_wgrad, dname=dname, n_experts=n_experts))[0]
@@ -135,10 +135,10 @@ def grouped_mx_gemm(x:Tensor|tuple[Tensor, Tensor], w:Tensor|tuple[Tensor, Tenso
   xe_in, out_shape = x_e8.reshape(M, K // 32), (M, N)
   if isinstance(x.device, tuple) and (row_axis := x.uop.axis) is not None:
     ndev = len(x.device)
-    out = Tensor(Tensor.invalids(*(s // ndev if i == row_axis else s for i, s in enumerate(out_shape)),
+    out = Tensor(Tensor.empty(*(s // ndev if i == row_axis else s for i, s in enumerate(out_shape)),
                                  dtype=dtypes.bfloat16, device=x.device).uop.unshard(row_axis), device=x.device)
   else:
-    out = Tensor.invalids(*out_shape, dtype=dtypes.bfloat16, device=x.device)
+    out = Tensor.empty(*out_shape, dtype=dtypes.bfloat16, device=x.device)
   return Tensor.custom_kernel(out, x_q, w_q, x_si, w_si, xe_in, w_e8, expert_off,
                               fxn=functools.partial(custom_hk_grouped_mxfp8_gemm, dname=dname, n_experts=E),
                               grad_fxn=(_grouped_bw_stored if pre_quantized else custom_grouped_mx_gemm_bw))[0]

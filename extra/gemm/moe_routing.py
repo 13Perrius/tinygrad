@@ -43,16 +43,16 @@ def router_mfma(x:Tensor, weight:Tensor, bias:Tensor) -> Tensor:
   else:
     assert math.prod(x.shape[:-1]) % 64 == 0
   x, weight, bias = x.contiguous(), weight.contiguous(), bias.contiguous()
-  out = _sharded_invalids((*x.shape[:-1], E), dtypes.float32, x.device)
+  out = _sharded_empty((*x.shape[:-1], E), dtypes.float32, x.device)
   out, *_ = Tensor.custom_kernel(out, x, weight, bias,
     fxn=functools.partial(_router_mfma_fwd, dname=str(x.device)), grad_fxn=_router_mfma_bwd)
   return out
 
-def _sharded_invalids(shape:tuple[int, ...], dtype, device) -> Tensor:
+def _sharded_empty(shape:tuple[int, ...], dtype, device) -> Tensor:
   if isinstance(device, tuple):
-    per = Tensor.invalids(shape[0]//len(device), *shape[1:], dtype=dtype, device=device)
+    per = Tensor.empty(shape[0]//len(device), *shape[1:], dtype=dtype, device=device)
     return Tensor(per.uop.unshard(0), device=device)
-  return Tensor.invalids(*shape, dtype=dtype, device=device)
+  return Tensor.empty(*shape, dtype=dtype, device=device)
 
 def _atomic_add(device:str) -> str:
   return "__hip_atomic_fetch_add({0}, {1}, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);" if device == "AMD" \
@@ -83,7 +83,7 @@ def _ggather_zero_kernel(out:UOp) -> UOp:
   return out.flatten().index(i).store(UOp.const(0.0, out.dtype)).end(i).sink(arg=KernelInfo(name="ggather_zero"))
 
 def _sharded_zeros(shape:tuple[int, ...], dtype, device) -> Tensor:
-  return Tensor.custom_kernel(_sharded_invalids(shape, dtype, device), fxn=_ggather_zero_kernel)[0]
+  return Tensor.custom_kernel(_sharded_empty(shape, dtype, device), fxn=_ggather_zero_kernel)[0]
 
 def _ggather_bwd(gradient:UOp, kernel:UOp) -> tuple:
   _, table_u, idx_u = kernel.src[1:4]
@@ -106,7 +106,7 @@ def _ggather_bwd(gradient:UOp, kernel:UOp) -> tuple:
 def grouped_gather_rows(table:Tensor, idx:Tensor, n_groups:int) -> Tensor:
   G, R, D = table.shape
   M = idx.shape[1]
-  out = _sharded_invalids((G, M, D), table.dtype, table.device)
+  out = _sharded_empty((G, M, D), table.dtype, table.device)
   return Tensor.custom_kernel(out, table, idx, fxn=_ggather_fwd_kernel, grad_fxn=_ggather_bwd)[0]
 
 def _gscatter_fwd_kernel(out:UOp, src:UOp, idx:UOp) -> UOp:

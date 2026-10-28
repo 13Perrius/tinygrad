@@ -48,11 +48,11 @@ def _fused_ce_loss_bwd(gradient:UOp, kernel:UOp, label_smoothing:float):
     axis = logits_u.axis
     ndev = len(device)
     local_shape = tuple(s//ndev if i == axis else s for i,s in enumerate((MBS, SEQ, VOCAB)))
-    d_logits = Tensor(Tensor.invalids(*local_shape, dtype=dtypes.bfloat16, device=device).uop.unshard(axis), device=device)
+    d_logits = Tensor(Tensor.empty(*local_shape, dtype=dtypes.bfloat16, device=device).uop.unshard(axis), device=device)
     rows_per_dev = local_shape[0] * local_shape[1]
     seq_per_dev = local_shape[1]
   else:
-    d_logits = Tensor.invalids(MBS, SEQ, VOCAB, dtype=dtypes.bfloat16, device=device)
+    d_logits = Tensor.empty(MBS, SEQ, VOCAB, dtype=dtypes.bfloat16, device=device)
     rows_per_dev = MBS * SEQ
     seq_per_dev = SEQ
   # NOTE: .mean() backward gives same grad per row (1/N), so broadcast is safe; take scalar
@@ -74,19 +74,19 @@ def fused_ce_loss(logits:Tensor, targets:Tensor, label_smoothing:float=0.1) -> T
     axis = logits.uop.axis
     assert axis in (0, 1), f"unsupported sharding axis={axis} for CE loss"
     ndev = len(logits.device)
-    loss_out = Tensor(Tensor.invalids(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
+    loss_out = Tensor(Tensor.empty(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
                       device=logits.device)
-    max_out  = Tensor(Tensor.invalids(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
+    max_out  = Tensor(Tensor.empty(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
                       device=logits.device)
-    lse_out  = Tensor(Tensor.invalids(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
+    lse_out  = Tensor(Tensor.empty(rows // ndev, dtype=dtypes.float32, device=logits.device).uop.unshard(0),
                       device=logits.device)
     local_shape = tuple(s//ndev if i == axis else s for i,s in enumerate(logits.shape))
     rows_per_dev = local_shape[0] * local_shape[1]
     seq_per_dev = local_shape[1]
   else:
-    loss_out = Tensor.invalids(rows, dtype=dtypes.float32, device=logits.device)
-    max_out  = Tensor.invalids(rows, dtype=dtypes.float32, device=logits.device)
-    lse_out  = Tensor.invalids(rows, dtype=dtypes.float32, device=logits.device)
+    loss_out = Tensor.empty(rows, dtype=dtypes.float32, device=logits.device)
+    max_out  = Tensor.empty(rows, dtype=dtypes.float32, device=logits.device)
+    lse_out  = Tensor.empty(rows, dtype=dtypes.float32, device=logits.device)
     rows_per_dev = rows
     seq_per_dev = SEQ
   targets_flat = targets.reshape(-1).cast(dtypes.int32)
