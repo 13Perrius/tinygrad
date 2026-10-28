@@ -100,12 +100,14 @@ def remove_noop_bufferize(idx,b2):
   if idx.src[1:] != b2.src[1:]: return None
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
+'''
 def after_all_invalid(after:UOp):
   buf = after.src[0].buf_uop
   # check all ranges are used (no expand), and same size (no pad and shrink)
   return all(s.op is Ops.END and (st:=s.src[0]).op is Ops.STORE and st.src[1].base.is_invalid and st.src[0].buf_uop is buf
     and all(r in st.src[0].ranges for r in s.ended_ranges)
     and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
+'''
 
 pm_const_buffer_folding = pm_mops+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
@@ -115,9 +117,6 @@ pm_const_buffer_folding = pm_mops+PatternMatcher([
   (UPat.cvar('c').or_casted().f(Ops.STAGE, allow_any_len=True, name="b"), lambda c,b: b.const_like(c.val)),
   # indexing a const is the const
   (UPat(Ops.INDEX, src=(UPat.cvar().or_casted("c"),),), lambda c: c),
-  # indexing an after with all fully invalid stores is invalid
-  (UPat(Ops.INDEX, src=(UPat(Ops.AFTER, name="after"),), allow_any_len=True, name="idx"),
-   lambda idx,after: idx.const_like(Invalid) if after_all_invalid(after) else None),
   # a deviceless MSTACK src is the same value on every device, so indexing the stack is just indexing that value
   (UPat(Ops.MSTACK, src=(UPat.var("s"),), allow_any_len=True).f(Ops.INDEX, allow_any_len=True, name="idx"),
    lambda s,idx: idx.replace(src=(s,)+idx.src[1:]) if s.device is None else None),
@@ -256,10 +255,6 @@ pm_add_buffers = pm_mops+pm_flatten_bufferize+PatternMatcher([
 
   # remove any RESHAPEs on KERNEL
   (UPat(Ops.CALL, name="k"), lambda k: k.replace(src=tuple(x.src[0] if x.op is Ops.RESHAPE else x for x in k.src))),
-
-  # remove invalid writes
-  (UPat(Ops.STORE, src=(UPat(), UPat(Ops.CONST, arg=Invalid))), lambda: UOp(Ops.NOOP)),
-  (UPat(Ops.AFTER, name="x"), remove_noop_afters),
 ])
 
 # *****************
