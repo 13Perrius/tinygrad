@@ -67,13 +67,13 @@ def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor
   assert half_k == half_k_b, f"MXFP4 K mismatch: A {a_q.shape}, B {b_q.shape}"
   is_multi = isinstance(a_q.device, tuple)
   reduce_out = is_multi and (a_q.uop.axis == 1 or b_q.uop.axis == 1)
-  if not is_multi: out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
-  elif reduce_out: out = Tensor(Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(0), device=a_q.device)
+  if not is_multi: out = Tensor.empty(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
+  elif reduce_out: out = Tensor(Tensor.empty(1, M, N, dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(0), device=a_q.device)
   elif a_q.uop.axis == 0:
-    out = Tensor(Tensor.invalids(1, M//len(a_q.device), N, dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(1), device=a_q.device)
+    out = Tensor(Tensor.empty(1, M//len(a_q.device), N, dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(1), device=a_q.device)
   elif b_q.uop.axis == 0:
-    out = Tensor(Tensor.invalids(1, M, N//len(a_q.device), dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(2), device=a_q.device)
-  else: out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
+    out = Tensor(Tensor.empty(1, M, N//len(a_q.device), dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(2), device=a_q.device)
+  else: out = Tensor.empty(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
   tile_m, tile_n = select_mxfp4_tile(a_q, b_q)
   out = Tensor.custom_kernel(out, a_q, b_q, scale_a, scale_b,
                              fxn=functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n))[0]
@@ -203,14 +203,14 @@ def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
   reduce_out = False
   if is_multi:
     ndev = len(a.device)
-    if a.uop.axis in (0, 1) or b.uop.axis in (0, 1): inv, out_axis, reduce_out = Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device), 0, True
-    elif b.uop.axis == 2: inv, out_axis = Tensor.invalids(1, M, N // ndev, dtype=a.dtype, device=a.device), 2
-    elif a.uop.axis == 2: inv, out_axis = Tensor.invalids(1, M // ndev, N, dtype=a.dtype, device=a.device), 1
-    else: inv, out_axis, reduce_out = Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device), 0, True
+    if a.uop.axis in (0, 1) or b.uop.axis in (0, 1): inv, out_axis, reduce_out = Tensor.empty(1, M, N, dtype=a.dtype, device=a.device), 0, True
+    elif b.uop.axis == 2: inv, out_axis = Tensor.empty(1, M, N // ndev, dtype=a.dtype, device=a.device), 2
+    elif a.uop.axis == 2: inv, out_axis = Tensor.empty(1, M // ndev, N, dtype=a.dtype, device=a.device), 1
+    else: inv, out_axis, reduce_out = Tensor.empty(1, M, N, dtype=a.dtype, device=a.device), 0, True
     out = Tensor(inv.uop.unshard(out_axis), device=a.device)
     dname = a.device[0]
   else:
-    out = Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device)
+    out = Tensor.empty(1, M, N, dtype=a.dtype, device=a.device)
     dname = a.device
   dname = dname.split(":")[0]
   out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
@@ -319,14 +319,14 @@ def asm_gemm(a:Tensor, b:Tensor, w_post_scale:Tensor|None=None, mx:bool=False, m
 
   if is_multi:
     if n_sharded:
-      out = Tensor(Tensor.invalids(batch, M, N//len(a.device), dtype=out_dtype, device=a.device).uop.unshard(2), device=a.device)
+      out = Tensor(Tensor.empty(batch, M, N//len(a.device), dtype=out_dtype, device=a.device).uop.unshard(2), device=a.device)
     elif m_sharded:
-      out = Tensor(Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device).uop.unshard(1), device=a.device)
+      out = Tensor(Tensor.empty(batch, M, N, dtype=out_dtype, device=a.device).uop.unshard(1), device=a.device)
     else:
-      out = Tensor(Tensor.invalids(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=out_dtype, device=a.device).uop.unshard(0),
+      out = Tensor(Tensor.empty(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=out_dtype, device=a.device).uop.unshard(0),
                    device=a.device)
   else:
-    out = Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device)
+    out = Tensor.empty(batch, M, N, dtype=out_dtype, device=a.device)
 
   renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
   dname, arch = dname.split(":")[0], renderer.target.arch
