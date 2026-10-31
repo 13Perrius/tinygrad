@@ -3,7 +3,7 @@ import math
 from collections import defaultdict
 from tinygrad.uop.ops import Ops, PatternMatcher, UPat, UOp, GroupOp, exec_alu, promo_dtype, identity_element
 from tinygrad.dtype import PyConst, ConstFloat, dtypes, can_lossless_cast, Invalid, bitcast, truncate
-from tinygrad.helpers import partition, all_same, prod, flatten, IMAGE, dedup, ceildiv
+from tinygrad.helpers import partition, all_same, prod, flatten, IMAGE, dedup, ceildiv, getenv
 from tinygrad.uop.divandmod import div_and_mod_symbolic
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.uop.weak import pm_uncast_const
@@ -63,6 +63,8 @@ def fold_add_divmod_recombine(x:UOp) -> UOp|None:
         return ((b % (div*d))*mul).usum(*rest)
   return None
 
+INVALID = getenv("INVALID", 0)
+
 # Invalid poisons the value: ops move inside the gate so the Invalid reaches the LOAD/STORE and folds there.
 # this needs to be before symbolic so that 0*something_that_might_be_invalid doesnt become 0
 invalid_pat = UPat(Ops.CONST, arg=Invalid, name="i")
@@ -84,6 +86,33 @@ def lift_reduce_gate(red:UOp, cond:UOp, x:UOp, i:UOp) -> UOp|None:
   inner = keep[0].uprod(*keep[1:]).where(x, x.const_like(identity_element(op, red.dtype))) if keep else x
   ret = red.replace(src=(inner,)+red.src[1:])
   return lift[0].uprod(*lift[1:]).where(ret, i) if lift else ret
+
+pm_test = PatternMatcher([
+  (UPat(GroupOp.Unary|GroupOp.Binary|{Ops.CAST,Ops.BITCAST}, name="x"), 
+  lambda x: UOp.invalid() if any(s.is_invalid and (x.op is not Ops.WHERE or i == 0) for i,s in enumerate(x.src)) else None),
+  (UPat(GroupOp.Unary|{Ops.CAST, Ops.BITCAST}, src=(invalid_gate,), name="u"),
+  lambda u,cond,x,i: cond.where(u.replace(src=(x,)), i)),
+  (UPat(GroupOp.Binary, name="b", src=[UPat.var("s"), invalid_gate]),
+  lambda b,s,cond,x,i: cond.where(b.replace(src=(s,x) if b.src[0] is s else (x,s)), i)),
+])
+
+pm_test_2 = PatternMatcher([
+  (UPat(GroupOp.Unary|{Ops.CAST, Ops.BITCAST}, src=(invalid_pat,), name="u"), lambda u,i: i),
+  (UPat(GroupOp.Binary, src=[UPat.var("s"), invalid_pat], name="b"), lambda b,s,i: i),
+  (UPat(GroupOp.Unary|{Ops.CAST, Ops.BITCAST}, src=(invalid_gate,), name="u"), lambda u,cond,x,i: cond.where(u.replace(src=(x,)), i)),
+  (UPat(GroupOp.Binary, src=[UPat.var("s"), invalid_gate], name="b"), 
+  lambda b,s,cond,x,i: cond.where(b.replace(src=(s,x) if b.src[0] is s else (x,s)), i))
+])
+
+pm_test_3 = PatternMatcher([
+  (UPat(Ops.SINK, name="x"), lambda x: x.replace(src=tuple(s for s in x.src if not s.is_invalid))),
+  (UPat(Ops.AFTER, name="a"), lambda a: x if (x:=a.src[0]).is_invalid else a.replace(src=(x, *(s for s in a.src[1:] if not s.is_invalid)))),
+  (UPat(GroupOp.All-GroupOp.Movement-{Ops.STACK}, name="x"),
+  lambda x: UOp.invalid() if any(s.is_invalid and (x.op is not Ops.WHERE or i == 0) for i,s in enumerate(x.src)) else None),
+  (UPat(GroupOp.Unary|{Ops.CAST,Ops.BITCAST}, src=(invalid_gate,), name="u"), lambda u,cond,x,i: cond.where(u.replace(src=(x,)), i)),
+  (UPat(GroupOp.Binary, src=[UPat.var("s"), invalid_gate], name="b"),
+  lambda b,s,cond,x,i: cond.where(b.replace(src=(s,x) if b.src[0] is s else (x,s)), i))
+])
 
 pm_data_invalid = PatternMatcher([
   (invalid_pat.broadcast(name="s"), lambda i,s: i.expand(s.shape)),
@@ -110,6 +139,19 @@ pm_data_invalid = PatternMatcher([
   (UPat(Ops.LOAD, src=(UPat(Ops.INDEX, src=(UPat(), invalid_pat), allow_any_len=True).or_casted(),), allow_any_len=True, name="x"),
     lambda x,i: x.src[1] if len(x.src) > 1 else x.const_like(0)),
 ])
+
+if INVALID:
+  pm_data_invalid = pm_test_3+PatternMatcher([
+    (invalid_gate.reduce(allow_any_len=True, name="red"), lift_reduce_gate),
+    # a gated Invalid condition lifts the gate out
+    (invalid_gate.where(UPat.var("a"), UPat.var("b")), lambda cond,x,i,a,b: cond.where(x.where(a,b), i)),
+    # normalize where(cond, Invalid, val) -> where(~cond, val, Invalid)
+    (UPat.var("cond").where(invalid_pat, UPat.var("val")), lambda cond, i, val: cond.logical_not().where(val, i) if not val.is_invalid else i),
+    # lift Invalid out: a.where(cond.where(x, Invalid), c) -> (~a|cond).where(a.where(x, c), Invalid)
+    (UPat.var("a").where(invalid_gate, UPat.var("c")), lambda cond,i,x,a,c:
+     (a.logical_not()|cond).where(a.where(x,c), i) if not c.is_invalid else None),
+    (UPat.var("a").where(UPat.var("b"), invalid_gate), lambda cond,i,x,a,b: (a|cond).where(a.where(b, x), i) if not b.is_invalid else None),
+  ])
 
 pm_remove_invalid = PatternMatcher([
   (invalid_gate.named("w"), lambda cond,x,i,w: w.replace(src=(cond,x,w.const_like(0)))),
@@ -416,6 +458,19 @@ pm_drop_and_clauses = PatternMatcher([(invalid_gate, drop_and_clauses)])
 
 # move conditions from where to load's valid, drop clauses already in load
 def where_on_load(cond:UOp, buf:UOp, idx:UOp, or_cast:UOp) -> UOp|None:
+  if INVALID: return None
+  # load_valid = idx.get_valid()
+  # where_clauses, load_clauses = list(cond.split_uop(Ops.AND)), set(load_valid.split_uop(Ops.AND))
+  # indices = {u for u in idx.backward_slice_with_self if u.op is Ops.INDEX}
+  # # can move if: not a const, condition's ranges are subset of idx's ranges, and no data dependent INDEX (only idx's INDEX allowed)
+  # def can_move(c:UOp) -> bool:
+  #   return c.op is not Ops.CONST and c.ranges.keys() <= idx.ranges.keys() and \
+  #     all(u in indices for u in c.backward_slice_with_self if u.op is Ops.INDEX)
+  # move, keep = partition([c for c in where_clauses if c not in load_clauses], can_move)
+  # if not move: return None
+  # idx = buf.index(idx.get_idx().valid(new_valid:=load_valid.uprod(*move)))
+  # if or_cast.op is Ops.CAST: idx = idx.cast(or_cast.dtype)
+  # return cond.uprod(new_valid).where(idx, idx.const_like(0))
   where_clauses, load_valid = list(cond.split_uop(Ops.AND)), idx.get_valid()
   in_load = set(load_valid.split_uop(Ops.AND))
   idx_index = {u for u in idx.backward_slice_with_self if u.op is Ops.INDEX}
