@@ -398,7 +398,7 @@ class TestUOpGraph(unittest.TestCase):
     val = UOp.const(42)
     st0 = glbl.index(UOp.invalid()).store(val)
     st1 = glbl.index(idx0.valid(UOp.const(True))).store(val)
-    uops = to_uops_list([st0, st1])
+    uops = to_uops_list([UOp.group(st0, st1)])
     # only the second store happens
     self.assertEqual(len([u for u in uops if u.op is Ops.STORE]), 1)
 

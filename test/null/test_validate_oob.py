@@ -161,10 +161,10 @@ class TestValidateOOB(unittest.TestCase):
 
   def test_float_cast_in_mask(self):
     with Context(CHECK_OOB=1, SPEC=2):
-      buf = UOp.param(0, dtypes.int, 1)
+      buf = UOp.param(0, dtypes.int, 2)
       r = UOp.range(20, 0)
       unknown = r.cast(dtypes.float).cast(dtypes.bool)  # a bool from a float is unconstrained
-      to_uops_list([buf.index(r.valid((r < 1) & unknown)).load()])
+      to_uops_list([buf.index(r.valid((r < 2) & unknown)).load()])
       with self.assertRaises(RuntimeError):
         to_uops_list([buf.index(r.valid(unknown)).load()])
 

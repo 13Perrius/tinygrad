@@ -2,7 +2,7 @@
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops
 from tinygrad.dtype import Invalid, dtypes
 
-def move_where_load(gate, l, a): return l.replace(src=(l.src[0], a.cast(l.dtype), l.src[2]))
+def move_where_load(gate, l, a): return l.replace(src=(l.src[0], l.vconst_like(0) if a.base.is_invalid else a.cast(l.dtype), l.src[2]))
 def ungate(x, gate): return x.replace(src=tuple(s.src[1] if s.op is Ops.WHERE and s.src[0] is gate and s.src[2].is_invalid else s for s in x.src))
 gated_mop = UPat((Ops.INDEX, Ops.SHRINK), src=(UPat(), UPat.var("gate").where(UPat(), UPat(arg=Invalid))), name="mop", allow_any_len=True)
 

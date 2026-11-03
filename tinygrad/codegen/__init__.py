@@ -12,7 +12,7 @@ from tinygrad.dtype import dtypes, AddrSpace
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_group_gpudims, pm_range_to_special
-from tinygrad.uop.symbolic import sym, symbolic_simple, symbolic, pm_move_where_on_load, pm_clean_up_group_sink, pm_remove_invalid
+from tinygrad.uop.symbolic import sym, symbolic_simple, symbolic, pm_move_where_on_load, pm_clean_up_group_sink, pm_remove_invalid, invalid_gate
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.codegen.decomp.dtype import DTypeDecompCtx, pm_dtype_decomps
 from tinygrad.codegen.decomp.op import get_late_rewrite_patterns, get_simplifying_rewrite_patterns
@@ -208,9 +208,11 @@ pm_add_loads = PatternMatcher([
   (UPat(Ops.STORE, name="x"), lambda x: x.replace(src=(x.src[0], maybe_load(x.src[1]))+x.src[2:])),
 ])
 
+#NOTE: guard on last rule?
 pm_lift_gated_reads = PatternMatcher([
-  (UPat().index(UPat.var("cond").where(UPat(), UPat.var("s"))).load(name="l"),
-  lambda cond,l,s: cond.where(l, s) if s.base.is_invalid else None),
+  (UPat(Ops.INDEX, src=(UPat(), invalid_gate), name="u"), lambda u,cond,x,i: cond.where(u, i)),
+  (invalid_gate.load(), lambda cond,x,i: cond.where(x.load(), i)),
+  (invalid_gate.store(UPat.var("d")), lambda cond,x,i,d: x.store(d) if x.op is Ops.INDEX and x.src[1].get_valid() is cond else None),
 ])
 
 def add_local_buffer(ctx, x:UOp):
@@ -283,6 +285,8 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
     sink = apply_opts(sink, ren, beam=ast.arg.beam)
 
   # ** expander (expand_rewrite) **
+  # sink = graph_rewrite(sink, sym+pm_move_where_on_load+pm_flatten_range+pm_reduce_unparented, name="postopt symbolic")
+  if getenv("INVALID", "NEW") == "NEW": sink = graph_rewrite(sink, pm_lift_gated_reads, walk=True, name="lift gated reads")
   # reduce_unparented: a REDUCE whose src folded to a CONST (e.g. x*0) has no parented ranges, collapse it before the expander
   sink = graph_rewrite(sink, sym+pm_move_where_on_load+pm_flatten_range+pm_reduce_unparented, name="postopt symbolic")
 
@@ -301,11 +305,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
 
   # **** optimizations are done, now we lower to actual code ****
 
-  # sink = graph_rewrite(sink, symbolic_simple+pm_expand_broadcast+pm_add_loads, name="*** expand broadcast / add loads")
-  sink = graph_rewrite(sink, pm_add_loads, name="add loads")
-  if getenv("INVALID",0):
-    sink = graph_rewrite(sink, pm_lift_gated_reads, walk=True, name="lift gated reads")
-  sink = graph_rewrite(sink, symbolic_simple+pm_expand_broadcast, name="expand broadcast")
+  sink = graph_rewrite(sink, symbolic_simple+pm_expand_broadcast+pm_add_loads, name="*** expand broadcast / add loads")
 
   # devectorize
   sink = graph_rewrite(sink, symbolic_simple+devectorizer2+indexing_simplify, name="devectorize2")
