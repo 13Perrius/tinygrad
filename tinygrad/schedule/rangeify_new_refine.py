@@ -159,6 +159,6 @@ def get_kernel_graph(tsink):
   tsink = graph_rewrite(tsink, pm_finalize_index+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
-  if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="view kernel graph")
+  if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
   return tsink
 
