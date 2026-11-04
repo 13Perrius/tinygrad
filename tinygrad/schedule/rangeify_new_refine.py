@@ -65,7 +65,6 @@ pm_push_ranges = PatternMatcher([
 ])
 
 def stack_select(rcmp, srcs):
-  # MSB-first bit tree
   if len(srcs) == 1: return srcs[0]
   half = 1 << ((len(srcs)-1).bit_length()-1)
   return (rcmp % (2*half) < half).where(stack_select(rcmp, srcs[:half]), stack_select(rcmp, srcs[half:]))
@@ -93,17 +92,9 @@ def count_uses(tsink):
     for s in x.src:
       src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
       if (curr:=uses.setdefault(s, src_use)) is not src_use: uses[s] = Kernelize.RANGES
-    '''
-    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or ((is_call:=x.op is Ops.CALL) and isinstance(x.body.arg, KernelInfo)):
-      for s in x.src[is_call:]:
-        if not((sb:=s if is_call else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
-    '''
-    if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
-      for s in x.src:
-        if not (sb:=s.base).has_buffer_identity(): kernvals[sb] = Kernelize.FORCE
-    elif x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo):
-      for s in x.src[1:]:
-        if not (s.has_buffer_identity() or s.is_variable): kernvals[s] = Kernelize.FORCE
+    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo)):
+      for s in x.src_without_body:
+        if not((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
   return kernvals
 
 pm_insert_stages = PatternMatcher([
