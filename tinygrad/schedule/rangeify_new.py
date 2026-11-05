@@ -1,7 +1,7 @@
 #TODO: consistent upat arg order?
 import itertools, functools
 from enum import Enum
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort, VIZ
@@ -26,7 +26,7 @@ def apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:UO
 def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   match op:
     case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
-    case Ops.EXPAND:  return rngs[len(arg):]
+    case Ops.EXPAND: return rngs[len(arg):]
     case Ops.PAD:
       #TODO: comment?
       return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
@@ -35,7 +35,7 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UO
       sink = UOp.sink(*rngs).simplify() # This applies any commutative flips to the ranges early.
       subs = {r:r.replace(arg=(AxisType.PLACEHOLDER, i)) for i,r in enumerate(sink.ranges)}
       return apply_reshape(in_shape, arg, sink.substitute(subs)).substitute({v:k for k,v in subs.items()}).src
-    case Ops.SHRINK:  return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
+    case Ops.SHRINK: return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
 
 def new_ranges(shape, rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
@@ -91,22 +91,22 @@ def count_uses(tsink):
     if x in kernvals or x.has_buffer_identity() or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_k): use = x
     for s in x.src:
       src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
-      if (curr:=uses.setdefault(s, src_use)) is not src_use: uses[s] = Kernelize.RANGES
+      if uses.setdefault(s, src_use) is not src_use: uses[s] = Kernelize.RANGES
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo)):
       for s in x.src_without_body:
-        if not((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
+        if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
   return kernvals
 
 pm_insert_stages = PatternMatcher([
-  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), 
+  (UPat(GroupOp.All-{Ops.STAGE}, name="x"),
   lambda ctx, x: x.replace(src=tuple(s if (k:=ctx.get(s)) is None else s.stage(arg=k) for s in x.src)))
 ])
 
 def kernelize(ctx, x):
   info, dev, ret = *ctx, x
-  if x.op is Ops.MSTACK or x.op is Ops.MSELECT: 
+  if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
     info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
-  elif x.has_buffer_identity() or x.op is Ops.CALL: 
+  elif x.has_buffer_identity() or x.op is Ops.CALL:
     info[ret] = ([ret], False)
   else:
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
