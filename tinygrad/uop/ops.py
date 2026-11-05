@@ -360,7 +360,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       case Ops.PYLITERAL: return None
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        if getenv("R","NEW") == "OLD":
+          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        return tuple(s.val if (s:=r.src[0] if r.op is Ops.RANGE else r).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
@@ -1504,7 +1506,6 @@ class UPat(RandMixin):
     arg = kwargs.pop('arg', None)
     if isinstance(arg, Ops): arg = (arg, 0)
     return UPat(Ops.REDUCE, self.match_dtype, src=(self,)+src, arg=arg, **kwargs)
-  #NOTE: new syntactic sugar 
   def stage(self, *src:UPat, **kwargs): return UPat(Ops.STAGE, src=(self,)+src, **kwargs)
   def broadcast(self, **kwargs): return UPat(Ops.STACK, self.match_dtype, src=self, **kwargs)
   def after(self, *src:UPat, **kwargs): return UPat(Ops.AFTER, self.match_dtype, (self,)+src, **kwargs)
