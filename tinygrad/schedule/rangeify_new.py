@@ -38,7 +38,7 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[U
     case Ops.SHRINK: return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
 
-def new_ranges(shape:tuple[sint, ...], rid=itertools.count(0)): return tuple(UOp.range(sz, next(rid)) for sz in shape)
+def new_ranges(shape:tuple[sint, ...], rid=itertools.count(0)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, next(rid)) for sz in shape)
 
 def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if x.op not in GroupOp.Broadcastable: return rngs
