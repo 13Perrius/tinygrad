@@ -51,7 +51,7 @@ pm_add_ranges = PatternMatcher([
 ])
 
 def push_ranges(ind:UOp, x:UOp) -> UOp|None:
-  if x.op is Ops.REDUCE:
+  if x.op is Ops.REDUCE: 
     return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
   elif x.op in GroupOp.Elementwise:
     rngs = ind.src[1:]
@@ -132,7 +132,7 @@ pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_
 def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
-pm_finalize_index = PatternMatcher([
+pm_finalize_indexing = PatternMatcher([
   (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x)
 ])
@@ -159,7 +159,7 @@ def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-  tsink = graph_rewrite(tsink, pm_finalize_index+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_finalize_indexing+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
