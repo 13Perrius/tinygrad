@@ -3,7 +3,7 @@ from tinygrad.dtype import dtypes, to_dtype
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, GroupOp
 from tinygrad.uop.ops import graph_rewrite, MapCtx, rewrite_group, identity_element, resolve_returned_after
 from tinygrad.uop.movement import mop_cleanup
-from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort
+from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort, IMAGE
 from tinygrad.schedule.indexing import apply_movement_op
 from tinygrad.schedule.allreduce import create_allreduce_function
 from tinygrad.schedule.multi import multi_pm
@@ -113,7 +113,7 @@ def fix_store_hazard(target:UOp, src:UOp):
   reaches_base: dict[UOp, bool] = {}
   for s in src.toposort(gate=store_hazard_boundary):
     reaches_base[s] = any(c is base or reaches_base.get(c) for c in s.src)
-    if reaches_base[s] and s.op in unsafe and not (s is view and s.op is Ops.SHRINK): return target.store(src.contiguous())
+    if reaches_base[s] and (IMAGE and (s.op in unsafe and not (s is view and s.op is Ops.SHRINK))): return target.store(src.contiguous())
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
