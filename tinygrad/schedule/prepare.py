@@ -113,7 +113,7 @@ def fix_store_hazard(target:UOp, src:UOp):
   reaches_base: dict[UOp, bool] = {}
   for s in src.toposort(gate=store_hazard_boundary):
     reaches_base[s] = any(c is base or reaches_base.get(c) for c in s.src)
-    if reaches_base[s] and (IMAGE and (s.op in unsafe and not (s is view and s.op is Ops.SHRINK))): return target.store(src.contiguous())
+    if reaches_base[s] and (IMAGE or (s.op in unsafe and not (s is view and s.op is Ops.SHRINK))): return target.store(src.contiguous())
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
