@@ -51,7 +51,7 @@ pm_add_ranges = PatternMatcher([
 ])
 
 def push_ranges(ind:UOp, x:UOp) -> UOp|None:
-  if x.op is Ops.REDUCE: 
+  if x.op is Ops.REDUCE:
     return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
   elif x.op in GroupOp.Elementwise:
     rngs = ind.src[1:]
