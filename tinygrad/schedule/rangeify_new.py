@@ -51,13 +51,12 @@ pm_add_ranges = PatternMatcher([
 ])
 
 def push_ranges(ind:UOp, x:UOp) -> UOp|None:
-  match x.op:
-    case Ops.CONST: return x
-    case Ops.REDUCE: return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
-    case op if op in GroupOp.Elementwise:
-      rngs = ind.src[1:]
-      return x.replace(src=tuple(s.index(*broadcast_ranges(x, s, rngs)) for s in x.src))
-    case _: return None
+  if x.op is Ops.REDUCE: 
+    return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
+  elif x.op in GroupOp.Elementwise:
+    rngs = ind.src[1:]
+    return x.replace(src=tuple(s if s.op is Ops.CONST else s.index(*broadcast_ranges(x, s, rngs)) for s in x.src))
+  return None
 
 pm_push_ranges = PatternMatcher([
   (UPat.var("x").index(allow_any_len=True, name="ind"), push_ranges),
@@ -130,7 +129,7 @@ def substitute_ranges(ctx, x:UOp) -> UOp|None:
 
 pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
 
-def compose_ranges(st:UOp, ind:UOp) -> UOp: 
+def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
 pm_finalize_index = PatternMatcher([
