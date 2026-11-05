@@ -362,8 +362,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         # STAGE adds the existing shape to the front, opposite of INDEX
         if getenv("R","NEW") == "OLD":
           return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
-        return tuple(s.val if (s:=r.src[0] if r.op is Ops.RANGE else r).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
-
+        return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
         wmma_b = _broadcast_shape(self.src[0].shape[:-1], self.src[1].shape[:-1], self.src[2].shape[:-1])
