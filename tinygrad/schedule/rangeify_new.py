@@ -92,7 +92,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
     for s in x.src:
       src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
       if uses.setdefault(s, src_use) is not src_use: uses[s] = Kernelize.RANGES
-    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and isinstance(x.body.arg, KernelInfo)):
+    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo))):
       for s in x.src_without_body:
         if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
   return kernvals
