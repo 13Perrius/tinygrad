@@ -45,23 +45,24 @@ def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   return tuple(UOp.const(0) if resolve(sz == 1, default=False) else r for sz,r in zip(s.shape, rngs[len(x.shape)-len(s.shape):]))
 
 pm_add_ranges = PatternMatcher([
-  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
+  (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg)),
   (UPat.var("x").stage(name="st"), lambda st, x: x.index(*(r:=new_ranges(x.shape))).stage(*r)),
-  (UPat.var("x").reduce(name="r"), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), arg=r.arg))
+  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r))
 ])
 
 def push_ranges(ind:UOp, x:UOp) -> UOp|None:
   if x.op is Ops.REDUCE:
-    return x.src[0].index(*(rr:=x.src[1:]), *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
+    return x.src[0].index(*(rr:=x.src[1:])[:x.arg[1]], *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
   elif x.op in GroupOp.Elementwise:
     rngs = ind.src[1:]
     return x.replace(src=tuple(s if s.op is Ops.CONST else s.index(*broadcast_ranges(x, s, rngs)) for s in x.src))
   return None
 
 pm_push_ranges = PatternMatcher([
-  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
+  (UPat.var("x").index(name="j", allow_any_len=True).index(name="i", allow_any_len=True), lambda i, j, x: x.index(*j.src[1:], *i.src[1:])),
+  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges)
 ])
 
 def stack_select(rcmp, srcs):
@@ -140,7 +141,17 @@ pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_
 def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
+def fix_store_hazard(ind, dst, src):
+  reads = (r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst)
+  if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
+    frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
+    store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
+    end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(st.shape))), bottom_up=True).end(*srngs)
+    return ind.store(end.buf_uop.after(end).index(*frngs))
+  return None
+
 pm_finalize_graph = PatternMatcher([
+  (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard), 
   (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x)
