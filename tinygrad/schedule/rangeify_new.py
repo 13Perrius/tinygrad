@@ -3,7 +3,7 @@ from enum import Enum
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC
+from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC, IMAGE
 from tinygrad.schedule.prepare import pm_gated_index
 from tinygrad.device import Device
 
@@ -142,8 +142,8 @@ def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
 def fix_store_hazard(ind, dst, src):
-  reads = (r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst)
-  if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
+  reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst]
+  if IMAGE or any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
     frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
     store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
     end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(st.shape))), bottom_up=True).end(*srngs)
