@@ -85,8 +85,9 @@ from tinygrad.schedule.multi import multi_pm
 
 from tinygrad.schedule.rangeify import get_kernel_graph as GKG_OLD
 from tinygrad.schedule.rangeify_new import get_kernel_graph as GKG_NEW
+from tinygrad.schedule.rangeify_new_walk import get_kernel_graph as GKG_WALK
 
-GKG_FXNS = {"OLD":GKG_OLD, "NEW":GKG_NEW}
+GKG_FXNS = {"OLD":GKG_OLD, "NEW":GKG_NEW, "WALK":GKG_WALK}
 get_kernel_graph = GKG_FXNS[getenv("R","NEW")]
 
 from tinygrad.helpers import CAPTURING
