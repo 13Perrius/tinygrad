@@ -3,9 +3,8 @@ from enum import Enum
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC
+from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC, DEV
 from tinygrad.schedule.prepare import pm_gated_index
-from tinygrad.device import Device
 
 @functools.cache
 def apply_reshape(in_shape:tuple[sint, ...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
@@ -176,7 +175,7 @@ pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda
 
 def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
-  limit = MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(Device.DEFAULT, 0)
+  limit = MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(DEV.device, 0)
   tsink = graph_rewrite(tsink, pm_limit_buffers if limit else pm_kernelize, ctx=({}, tsink.device, limit), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
