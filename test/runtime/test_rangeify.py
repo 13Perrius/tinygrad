@@ -39,13 +39,13 @@ class TestRangeifyEdgeCase(unittest.TestCase):
     self.assertEqual(Tensor((Tensor([1, 2, 3]).realize().uop + 1).index(v)).item(), 3)
     self.assertEqual(Tensor(Tensor([1, 2, 3]).realize().uop.index(v)).item(), 2)
     self.assertEqual(Tensor(Tensor([1, 2, 3]).realize().uop.index(Tensor([2]).realize()[0].uop % 3)).item(), 3)
-    #NOTE: this test needs to go, an invalid read =/= 0 
+    #NOTE: these tests need to go, an invalid read =/= 0 
     '''
     self.assertEqual([Tensor((Tensor([1, 2, 3]).realize().uop + 1).pad(((1, 1),)).index(Variable("p", 0, 4).bind(i))).item() for i in range(5)],
                      [0, 2, 3, 4, 0])
-    '''
     stack = UOp.stack(UOp.const(42, dtypes.int)).pad(((1, 1),))
     self.assertEqual([Tensor(stack.index(Variable("q", 0, 2).bind(i))).item() for i in range(3)], [0, 42, 0])
+    '''
     self.assertEqual(Tensor(Tensor([[1, 2, 3]]).realize().expand(4, 3).uop.index(Variable("r", 0, 3).bind(2))).tolist(), [1, 2, 3])
     self.assertEqual(Tensor((Tensor([[1, 2, 3], [4, 5, 6]]).realize().uop + 1).index(Variable("w", 0, 1).bind(1))).tolist(), [5, 6, 7])
     self.assertEqual(Tensor(Tensor([7]).realize().expand(3).uop.index(Tensor([2, 0]).realize().uop)).tolist(), [7, 7])
