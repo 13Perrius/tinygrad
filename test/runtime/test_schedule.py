@@ -54,7 +54,8 @@ class TestSchedule(unittest.TestCase):
 
   def test_value_order_dependency_requires_storage(self):
     c = Tensor([0], dtype=dtypes.int32).realize()
-    with self.assertRaisesRegex(RuntimeError, "kernel boundary requires storage"):
+    #NOTE: this should raise in the spec, not in rangeify
+    with self.assertRaisesRegex(RuntimeError, "UOp verification failed"):
       Tensor(UOp.const(1, dtypes.int32).after(c.uop.index(0).store(5))).item()
 
   def test_cumsum_parallel_reduce_fused(self):
