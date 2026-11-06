@@ -27,7 +27,7 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[U
     case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
     case Ops.EXPAND: return rngs[len(arg):]
     case Ops.PAD:
-      # Pad conversion should solely use the new valid, so only the condition is included in the rewrite.
+      # Pad conversion should solely use the new valid, so only the condition is rewritten.
       return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
         symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
@@ -44,9 +44,9 @@ def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   return tuple(UOp.const(0) if resolve(sz == 1, default=False) else r for sz,r in zip(s.shape, rngs[len(x.shape)-len(s.shape):]))
 
 pm_add_ranges = PatternMatcher([
-  (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg)),
+  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
   (UPat.var("x").stage(name="st"), lambda st, x: x.index(*(r:=new_ranges(x.shape))).stage(*r)),
-  (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r))
+  (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg))
 ])
 
 def push_ranges(ind:UOp, x:UOp) -> UOp|None:
@@ -58,13 +58,14 @@ def push_ranges(ind:UOp, x:UOp) -> UOp|None:
   return None
 
 pm_push_ranges = PatternMatcher([
-  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
-  lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
   (UPat.var("x").index(name="j", allow_any_len=True).index(name="i", allow_any_len=True), lambda i, j, x: x.index(*j.src[1:], *i.src[1:])),
-  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges)
+  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges),
+  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
+  lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:])))
 ])
 
 def stack_select(rcmp, srcs):
+  # MSB-first bit tree
   if len(srcs) == 1: return srcs[0]
   half = 1 << ((len(srcs)-1).bit_length()-1)
   return (rcmp % (2*half) < half).where(stack_select(rcmp, srcs[:half]), stack_select(rcmp, srcs[half:]))
@@ -81,6 +82,7 @@ pm_convert_ranges = PatternMatcher([
   (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_pad_to_where)
 ])
 
+# A STAGE with a Kernelize arg is a candidate for kernelization.
 Kernelize = Enum('Kernelize', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
 
 def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
@@ -88,10 +90,13 @@ def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
   kernvals: dict[UOp, Kernelize] = {}
   for x in reversed(tsink.toposort()):
     if (is_k:=isinstance(use:=uses[x], Kernelize)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: kernvals.setdefault(x, use)
+    # A kernel, a movement op, or a REDUCE are all distinct uses. >2 distinct uses => candidate for kernelization.
     if x in kernvals or x.has_buffer_identity() or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_k): use = x
     for s in x.src:
+      # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
       src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
       if uses.setdefault(s, src_use) is not src_use: uses[s] = Kernelize.RANGES
+    # MSTACk, MSELECT, and custom kernels or program srcs are always kernelized. MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo))):
       for s in x.src_without_body:
         if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
@@ -117,6 +122,7 @@ def kernelize(ctx, x:UOp) -> UOp:
       if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
         ret = (a:=UOp.alloc(x.shape, x.dtype, device=ctx[1] if x.device is None else x.device)).base.after(a.store(x.src[0])).view_as(x.shape)
         bufs, red = [ret], False
+      # If a uop is staged with RANGES, it has >2 distinct uses so it stays staged. This prevents the graph from blowing up during range-pushing.
       elif k is not Kernelize.RANGES or x.max_numel() == 1: ret = x.src[0]
     info[ret] = (bufs, red)
   return ret
@@ -150,10 +156,11 @@ def fix_store_hazard(ind, dst, src):
   return None
 
 pm_finalize_graph = PatternMatcher([
-  (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
-  (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x),
-  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x)
+  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
+  (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
+  # This is where staged ranges are removed.
+  (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges)
 ])
 
 def add_arg(ctx, x:UOp) -> UOp|None:
@@ -167,7 +174,8 @@ pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RA
 
 def split_kernels(s:UOp) -> UOp:
   args: list[UOp] = []
-  rargs = (x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity()) if x.op is Ops.RANGE)
+  # Codegen does better if ranges are ordered and renumbered according to creation order.
+  rargs = [x.arg for x in s.toposort(gate=lambda x: not x.has_buffer_identity()) if x.op is Ops.RANGE]
   s = graph_rewrite(s, pm_kernel, ctx=(args, {arg:i for i,arg in enumerate(sorted(rargs))}), bottom_up=True, walk=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*args)
 
