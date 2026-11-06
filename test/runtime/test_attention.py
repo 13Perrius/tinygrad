@@ -1,10 +1,10 @@
 import unittest
 import numpy as np
-from tinygrad import Tensor, dtypes, nn
+from tinygrad import Tensor, dtypes, nn, UOp
 from tinygrad.llm.model import (
   GatedDeltaNetBlock, SSMConfig, TransformerBlock, TransformerConfig, MLATransformerBlock, Indexer, IndexerConfig,
-  HyperConnection, HCConfig,
-  apply_rope as apply_rope_new, precompute_freqs_cis, pairwise_topk,
+  HyperConnection, HCConfig, AttentionResidual,
+  apply_rope as apply_rope_new, precompute_freqs_cis, pairwise_topk, short_conv,
 )
 from test.helpers import slow
 
@@ -77,13 +77,19 @@ class TestAttention(unittest.TestCase):
     # pre averages streams [1, 3] to 2, the sublayer squares it to 4, and post adds 4 to both streams
     # mixing rows [3/4, 1/4], [1/2, 1/2] normalize to [3/5, 1/3], [2/5, 2/3]
     expected = [[[[4 + (3/5 + 3*2/5)], [4 + (1/3 + 3*2/3)]]]]
-    actual = hc(Tensor([[[[1.], [3.]]]]), lambda x: x.square())
-    np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6, atol=1e-7)
     for mask in (None, Tensor([0., -np.inf])):
       with self.subTest(mask=mask is not None):
         actual, returned_mask = hc(Tensor([[[[1.], [3.]]]]), lambda x: (x.square(), mask))
         self.assertIs(returned_mask, mask)
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6, atol=1e-7)
+
+  def test_attention_residual(self):
+    # rmsnorm makes the streams [1, -3] into scores [log 3, -log 3], softmax [9/10, 1/10] mixes them to 0.6, the sublayer squares it
+    for new_block, expected in ((True, [1, -3, 0.36]), (False, [1, -3 + 0.36])):
+      res = AttentionResidual(self._make_config(dim=1), new_block)
+      res.weight = Tensor([np.log(3)])
+      actual, _ = res(Tensor([[[[1.], [-3.]]]]), lambda x: (x.square(), None))
+      np.testing.assert_allclose(actual.numpy().flatten(), expected, rtol=1e-5)
 
   def test_indexer(self):
     indexer = Indexer(self._make_config(dim=2, q_lora_rank=2, indexer=IndexerConfig(n_heads=1, head_dim=2, top_k=2, kpool=2, norm_eps=1e-6)))
@@ -113,6 +119,18 @@ class TestAttention(unittest.TestCase):
     for t in range(4): expected[t, np.argsort(scores[t, :t+1])[-2:]] = 0.0
     np.testing.assert_allclose(indexer(x, q, 0, precompute_freqs_cis(2, 4, 10000.0)).numpy(), expected[None, None])
 
+  def test_indexer_msa(self):
+    # minimax-m3: each head selects the pools with its best max(q·k) and always its own pool
+    idx = IndexerConfig(n_heads=2, head_dim=2, top_k=4, kpool=2, norm_eps=1e-6, msa=True)
+    indexer = Indexer(self._make_config(dim=2, max_context=6, indexer=idx))
+    indexer.attn_q_b.weight, indexer.attn_k.weight = Tensor([[1., 0.], [0., 0.], [0., 0.], [0., 1.]]), Tensor.eye(2)
+    x = Tensor([[[1., 0.], [-1., 0.], [1., 1.], [1., 1.], [-1., -1.], [-1., -1.]]])
+    indexer._init_state(x)
+    # head 0 picks the first pool by its best key (the second has the higher sum), head 1 the second, the last query keeps its own low pool
+    allowed = np.tril(np.ones((2, 6, 6)))
+    allowed[0, 4:, 2:4] = allowed[1, 4:, 0:2] = 0
+    np.testing.assert_array_equal(indexer(x, Tensor.ones(1, 6, 2), 0).numpy(), np.where(allowed, 0., -np.inf)[None])
+
   def test_mla_indexer_mask(self):
     idx = IndexerConfig(n_heads=1, head_dim=2, top_k=2, kpool=2, norm_eps=1e-6)
     block = MLATransformerBlock(self._make_config(dim=2, kv_lora_rank=2, q_lora_rank=2, max_context=5, indexer=idx))
@@ -133,7 +151,8 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
     return TransformerConfig(**({"num_blocks":1, "dim":8, "hidden_dim":16, "n_heads":1, "n_kv_heads":1,
                                  "norm_eps":1e-5, "vocab_size":32, "head_dim":8, "rope_theta":10000.0,
                                  "rope_dim":8, "v_head_dim":8, "max_context":4, "ssm_layers":(True,),
-                                 "ssm":SSMConfig(conv_kernel=2, state_size=4, group_count=1, time_step_rank=1, inner_size=4)} | kwargs))
+                                 "ssm":SSMConfig(conv_kernel=2, state_size=4, group_count=1, time_step_rank=1, inner_size=4,
+                                                 silu_gate=True)} | kwargs))
 
   def _make_block(self, config:TransformerConfig) -> GatedDeltaNetBlock:
     block = GatedDeltaNetBlock(config, config.ssm)
@@ -157,6 +176,8 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
   def _cache_views(self, block:GatedDeltaNetBlock) -> tuple[np.ndarray, np.ndarray]:
     if hasattr(block, 'conv_state'):
       return block.conv_state.numpy(), block.recurrent_state.numpy()
+    elif hasattr(block, 'conv_states'):
+      return np.concatenate([s.numpy() for s in block.conv_states], -1), block.recurrent_state.numpy()
     else:
       conv_flat = (block.ssm_conv_kernel - 1) * block.conv_channels
       cache = block.delta_cache.numpy()
@@ -165,7 +186,7 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
       return conv_state, recurrent_state
 
   def _reset_state(self, block:GatedDeltaNetBlock):
-    Tensor.realize(block.conv_state.assign(block.conv_state.const_like(0)),
+    Tensor.realize(*[s.assign(s.const_like(0)) for s in (block.conv_states if hasattr(block, 'conv_states') else [block.conv_state])],
                    block.recurrent_state.assign(block.recurrent_state.const_like(0)))
 
   def _linear_np(self, x:np.ndarray, weight:np.ndarray) -> np.ndarray:
@@ -275,8 +296,9 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
     # q/k are normalized as x/sqrt(sum(x²)+1e-6) like FLA: tiny vectors aren't scaled up to unit length
     ssm = SSMConfig(conv_kernel=4, state_size=8, group_count=2, time_step_rank=2, inner_size=16, kda=True)
     block = GatedDeltaNetBlock(self._make_config(dim=16, n_heads=2, ssm=ssm), ssm)
-    block.attn_qkv.weight = Tensor([1e-4]*32 + [1.0]*16).reshape(48, 1).expand(48, 16) / 16  # x of ones: q = k = 1e-4, v = 1
-    block.ssm_conv1d["weight"], block.ssm_beta.weight = Tensor.ones(48, 4), Tensor.zeros(2, 16)
+    block.attn_q.weight = block.attn_k.weight = Tensor.full((16, 16), 1e-4/16)  # x of ones: q = k = 1e-4, v = 1
+    block.attn_v.weight, block.ssm_beta.weight = Tensor.full((16, 16), 1/16), Tensor.zeros(2, 16)
+    block.ssm_conv1d_q["weight"] = block.ssm_conv1d_k["weight"] = block.ssm_conv1d_v["weight"] = Tensor.ones(16, 4)
     x = Tensor.ones(1, 1, 16)
     block._init_state(x)
     block._attention(x, 0).realize()
@@ -318,7 +340,7 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
     # full prefill is proven equivalent to decode by test_gatedeltanet_reference_and_reset (delta rule) and
     # test_kda_prefill_matches_decode (kda), so use it as the baseline and only exercise multi-chunk handoffs here
     for kda in (False, True):
-      ssm = SSMConfig(conv_kernel=2, state_size=4, group_count=1, time_step_rank=1, inner_size=4, kda=kda)
+      ssm = SSMConfig(conv_kernel=2, state_size=4, group_count=1, time_step_rank=1, inner_size=4, kda=kda, silu_gate=not kda)
       config = self._make_config(ssm=ssm)
       if kda:
         block = GatedDeltaNetBlock(config, config.ssm)
@@ -347,6 +369,19 @@ class TestGatedDeltaNetBlock(unittest.TestCase):
     restarted = self._run_attention(block, x[:, :2], 0)
     fresh = self._run_attention(self._make_block(config), x[:, :2], 0)
     np.testing.assert_allclose(restarted, fresh, rtol=1e-3, atol=1e-3)
+
+class TestShortConv(unittest.TestCase):
+  def test_short_conv(self):
+    # the window is [state 1, 2 | x 3, 4 | pad 0], tap i of output t reads row t + i*dilation, x becomes the state
+    for weight, dilation, initial, expected in (([[1., 0., 10.]], 1, False, [31, 42]), ([[1., 0., 10.]], 1, True, [30, 40]),
+                                                ([[1., 10.]], 2, False, [31, 42])):
+      with self.subTest(dilation=dilation, initial=initial):
+        state = Tensor([[[1.], [2.]]]).contiguous().realize()
+        x = Tensor([[[3.], [4.], [0.]]])[:, :UOp.variable("T", 1, 3).bind(2)]
+        out, store = short_conv(state, x, Tensor(weight), Tensor(initial), dilation)
+        np.testing.assert_allclose(out.numpy().flatten()[:2], expected, rtol=1e-6)
+        Tensor(state.uop.after(store)).realize()
+        np.testing.assert_array_equal(state.numpy().flatten(), [3, 4])
 
 class TestPairwiseTopk(unittest.TestCase):
   def test_basic_topk(self):

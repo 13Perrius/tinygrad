@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
+from typing import cast
 import itertools
 from tinygrad.dtype import dtypes, AddrSpace, Invalid
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, KernelInfo
@@ -99,6 +100,13 @@ def remove_noop_bufferize(idx,b2):
   if idx.src[1:] != b2.src[1:]: return None
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
+def after_all_invalid(after:UOp):
+  buf = after.src[0].buf_uop
+  # check all ranges are used (no expand), and same size (no pad and shrink)
+  return all(s.op is Ops.END and (st:=s.src[0]).op is Ops.STORE and st.src[1].base.is_invalid and st.src[0].buf_uop is buf
+    and all(r in st.src[0].ranges for r in s.ended_ranges)
+    and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
+
 pm_const_buffer_folding = pm_mops+pm_gated_index+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
@@ -107,6 +115,9 @@ pm_const_buffer_folding = pm_mops+pm_gated_index+PatternMatcher([
   (UPat.cvar('c').or_casted().f(Ops.STAGE, allow_any_len=True, name="b"), lambda c,b: b.const_like(c.val)),
   # indexing a const is the const
   (UPat(Ops.INDEX, src=(UPat.cvar().or_casted("c"),),), lambda c: c),
+  # indexing an after with all fully invalid stores is invalid
+  (UPat(Ops.INDEX, src=(UPat(Ops.AFTER, name="after"),), allow_any_len=True, name="idx"),
+   lambda idx,after: idx.const_like(Invalid) if after_all_invalid(after) else None),
   # a deviceless MSTACK src is the same value on every device, so indexing the stack is just indexing that value
   (UPat(Ops.MSTACK, src=(UPat.var("s"),), allow_any_len=True).f(Ops.INDEX, allow_any_len=True, name="idx"),
    lambda s,idx: idx.replace(src=(s,)+idx.src[1:]) if s.device is None else None),
@@ -148,7 +159,7 @@ pm_no_indexing_calls = PatternMatcher([
 # the kernel graph is what gets executed: no shape views left in it, the storage of a value is just the storage
 pm_no_views = PatternMatcher([
   (UPat((Ops.RESHAPE, Ops.SHRINK), name="v",
-        src=(UPat((Ops.AFTER, Ops.PARAM, Ops.UNSHARD, Ops.MSTACK, Ops.BUFFER, Ops.ALLOC)),), allow_any_len=True), lambda v: v.src[0]),
+        src=(UPat(GroupOp.Defines|{Ops.AFTER, Ops.UNSHARD, Ops.MSTACK}),), allow_any_len=True), lambda v: v.src[0]),
 ])
 
 DEVICE_MAX_BUFS = {"WEBGPU": 8} # TODO: get from device?
@@ -175,7 +186,13 @@ def _limit_bufs(ctx:LimitBufsContext, root:UOp):
 
   if len(bufs) > MAX_BUFS - 1: # NOTE: this -1 is for the output buffer
     return root.replace(src=tuple(stage(ctx, s) if s.op in GroupOp.Elementwise and s.device is not None else s for s in root.src))
-pm_limit_bufs = PatternMatcher([(UPat(set.union(GroupOp.Binary, GroupOp.Ternary), name="root"), _limit_bufs)])
+
+def fix_store_hazard(ctx:LimitBufsContext, dst:UOp, src:UOp):
+  loads = [u for u in src.toposort(gate=lambda u: u.op not in {Ops.STAGE, Ops.AFTER}) if u.op is Ops.INDEX and u.buf_uop is dst.buf_uop]
+  if any(u.src[1].get_idx() is not dst.src[1].get_idx() for u in loads): return dst.store(stage(ctx, src))
+
+pm_limit_bufs = PatternMatcher([(UPat(set.union(GroupOp.Binary, GroupOp.Ternary), name="root"), _limit_bufs),
+  (UPat(Ops.INDEX, name="dst").store(UPat.var("src")), fix_store_hazard)])
 
 # *****************
 # 4. put in buffers for bufferize
@@ -224,7 +241,8 @@ def flatten_bufferize(x:UOp):
 pm_flatten_bufferize = PatternMatcher([(UPat(Ops.STAGE, name="x"), flatten_bufferize)])
 
 def is_noop_after_dep(x:UOp) -> bool:
-  return (x.op is Ops.NOOP and len(x.src) == 0) or (x.op is Ops.END and is_noop_after_dep(x.src[0]))
+  return (x.op is Ops.NOOP and len(x.src) == 0) or (x.op in (Ops.END, Ops.AFTER) and is_noop_after_dep(x.src[0]) and
+    all(s.op is Ops.RANGE for s in x.src[1:]))
 
 def remove_noop_afters(x:UOp) -> UOp|None:
   src = (x.src[0],) + tuple(s for s in x.src[1:] if not is_noop_after_dep(s))
@@ -245,6 +263,10 @@ pm_add_buffers = pm_mops+pm_gated_index+pm_flatten_bufferize+PatternMatcher([
 
   # remove any RESHAPEs on KERNEL
   (UPat(Ops.CALL, name="k"), lambda k: k.replace(src=tuple(x.src[0] if x.op is Ops.RESHAPE else x for x in k.src))),
+
+  # remove invalid writes
+  (UPat(Ops.STORE, src=(UPat(), UPat(Ops.CONST, arg=Invalid))), lambda: UOp(Ops.NOOP)),
+  (UPat(Ops.AFTER, name="x"), remove_noop_afters),
 ])
 
 # *****************
@@ -268,6 +290,7 @@ def debuf(slot:int, buf:UOp):
 
 def handle_after(ctx:LocalAddBufferContext, after:UOp):
   if after.addrspace == AddrSpace.LOCAL: return None
+  if after.addrspace is AddrSpace.ALU: raise RuntimeError("kernel boundary requires storage")
   buf = after.buf_uop
   # NOTE: this is bottom up, so we only add it once
   if buf not in ctx.map: ctx.map[buf] = after
@@ -290,9 +313,6 @@ to_define_global = PatternMatcher([
   (UPat(Ops.INDEX, src=(UPat(Ops.PARAM, name="v"),)), lambda v: v if v.addrspace == AddrSpace.ALU else None),
 
   (UPat(Ops.AFTER, name="after"), handle_after),
-
-  # remove device from local BUFFERIZE
-  (UPat(Ops.STAGE, name="b"), lambda b: b.replace(arg=replace(b.arg, device=None))),
 
   (UPat(Ops.RANGE, name="r"), lambda ctx, r: ctx.ranges.setdefault(r.arg)),
 ])
