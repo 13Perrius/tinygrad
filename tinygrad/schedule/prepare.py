@@ -65,7 +65,7 @@ pm_fold_moved_after = PatternMatcher([
 def _mop_index(r:UOp, idx:UOp):
   idxs = idx.src[1:]
   if len(idxs) == len(r.shape):
-    # If an INDEX into an EXPAND adds leading axes, we have to preserve its shape.  
+    # If an INDEX into an EXPAND adds leading axes, we have to preserve its shape.
     ret = r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), arg=idx.arg)
     return ret.expand(idx.shape) if r.op is Ops.EXPAND else ret
   if r.op is Ops.RESHAPE:
