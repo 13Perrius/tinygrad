@@ -27,7 +27,7 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[U
     case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
     case Ops.EXPAND: return rngs[len(arg):]
     case Ops.PAD:
-      #TODO: comment?
+      # Pad conversion should solely use the new valid, so only the condition is included in the rewrite.
       return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
         symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
