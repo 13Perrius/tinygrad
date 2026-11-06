@@ -1,4 +1,3 @@
-#TODO: consistent upat arg order?
 import itertools, functools
 from enum import Enum
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
@@ -60,7 +59,7 @@ def push_ranges(ind:UOp, x:UOp) -> UOp|None:
   return None
 
 pm_push_ranges = PatternMatcher([
-  (UPat.var("x").index(allow_any_len=True, name="ind"), push_ranges),
+  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:]))),
 ])
@@ -78,8 +77,8 @@ def convert_pad_to_where(ind:UOp, x:UOp) -> UOp:
   return valid.where(x.src[0].index(*rngs), UOp.const(x.dtype.const(0)))
 
 pm_convert_ranges = PatternMatcher([
-  (UPat(Ops.STACK, name="x").index(allow_any_len=True, name="ind"), convert_stack_to_where),
-  (UPat(Ops.PAD, name="x").index(allow_any_len=True, name="ind"), convert_pad_to_where)
+  (UPat(Ops.STACK, name="x").index(name="ind", allow_any_len=True), convert_stack_to_where),
+  (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_pad_to_where)
 ])
 
 Kernelize = Enum('Kernelize', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
@@ -142,7 +141,7 @@ def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
 pm_finalize_indexing = PatternMatcher([
-  (UPat(Ops.STAGE, name="st").index(allow_any_len=True, name="ind"), compose_ranges),
+  (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x)
 ])
 
