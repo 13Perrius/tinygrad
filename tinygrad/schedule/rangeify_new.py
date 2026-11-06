@@ -4,7 +4,7 @@ from enum import Enum
 from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import dedup, argsort, VIZ
+from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS
 from tinygrad.schedule.prepare import pm_gated_index
 
 @functools.cache
@@ -123,6 +123,14 @@ def kernelize(ctx, x:UOp) -> UOp:
 
 pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
 
+def limit_buffers(ctx, x:UOp) -> UOp:
+  if len(ctx[0][res:=kernelize(ctx, x)][0]) < ctx[2] or x.op not in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK,Ops.STACK}: return res
+  if x.op is Ops.STACK and (n:=len(x.src)) >= ctx[2]:
+    return graph_rewrite(UOp.stack(*x.src[:n//2]).cat(UOp.stack(*x.src[n//2:])), pm_limit_buffers, ctx=ctx, walk=True)
+  return kernelize(ctx, x.replace(src=tuple(kernelize(ctx, s.stage(arg=Kernelize.FORCE)) if len(ctx[0][s][0]) > 1 else s for s in x.src)))
+
+pm_limit_buffers = PatternMatcher([(UPat(GroupOp.All, name="x"), limit_buffers)])
+
 def substitute_ranges(ctx, x:UOp) -> UOp|None:
   if not any(r in ctx for r in x.ranges): raise BottomUpGate()
   return ctx.get(x)
@@ -156,7 +164,8 @@ pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda
 
 def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
-  tsink = graph_rewrite(tsink, pm_kernelize, ctx=({}, tsink.device), walk=True, name="kernelize")
+  limit = MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(str(device[0] if isinstance(device:=tsink.device, tuple) else device).split(":")[0], 0)
+  tsink = graph_rewrite(tsink, pm_limit_buffers if limit else pm_kernelize, ctx=({}, device, limit), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
   tsink = graph_rewrite(tsink, pm_finalize_indexing+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
