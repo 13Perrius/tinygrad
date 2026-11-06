@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING, Callable, Self
-from tinygrad.dtype import ConstType, DType, DTypeLike, Invalid, dtypes, to_dtype
+from tinygrad.dtype import ConstType, DType, DTypeLike, dtypes, to_dtype
 from tinygrad.helpers import argfix
 from tinygrad.mixin.dtype import DTypeMixin
 from tinygrad.mixin.movement import MovementMixin

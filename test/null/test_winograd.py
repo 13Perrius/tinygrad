@@ -21,8 +21,6 @@ class TestWinograd(unittest.TestCase):
     # winograd backward runs in a fraction of the direct-conv flops; NOOPT=1 keeps the raw flop ratio from drifting with the optimizer
     IC, OC, H = 64, 64, 28
     x,w = Tensor.empty(1,IC,H,H,device="NULL").realize(), Tensor.empty(OC,IC,3,3,device="NULL").realize()
-    #NOTE: this was only a regression with R=NEW with a constant gradient bc of the remove_dead_axes thing, but that pass isnt actually useful in practice
-    #NOTE: I just altered this test to use a real gradient, at which point R=OLD/NEW are basically at parity
     g = Tensor.empty(1,OC,H,H,device="NULL").realize()
     x.requires_grad = w.requires_grad = True
     def backward_ops(wino):

@@ -3,7 +3,7 @@ from tinygrad import Tensor, UOp, GlobalCounters, Context, Device, Variable, Tin
 from tinygrad.engine.realize import run_linear
 from tinygrad.codegen import to_program
 import numpy as np
-from tinygrad.dtype import AddrSpace, dtypes, Invalid
+from tinygrad.dtype import AddrSpace, dtypes
 from tinygrad.helpers import getenv
 from test.mockgpu.amd.emu import ASM_CALL
 from tinygrad.schedule.rangeify import BufferizeOpts
@@ -444,7 +444,7 @@ class TestCustomKernel(unittest.TestCase):
       self.assertEqual(out.tolist(), [7, 9])
 
   def test_deleted_store_keeps_deps(self):
-    for f in (lambda a, s: s[1].store(s[1].load()), lambda a, s: s[UOp.invalid()].store(5), 
+    for f in (lambda a, s: s[1].store(s[1].load()), lambda a, s: s[UOp.invalid()].store(5),
               lambda a, s: a[UOp.invalid()].store(s[1].load())):
       out = Tensor.custom_kernel(Tensor.zeros(3, dtype=dtypes.int).contiguous(),
                                  fxn=lambda a: f(a, a.after(a[0].store(7))).sink(arg=KernelInfo(opts_to_apply=())))[0]

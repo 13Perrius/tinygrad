@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field, replace
-from typing import cast
 import itertools
 from tinygrad.dtype import dtypes, AddrSpace, Invalid
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, KernelInfo
