@@ -142,8 +142,8 @@ def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
 def fix_store_hazard(ind, dst, src):
-  if not (reads:=[r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst]): return None
-  if IMAGE or any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
+  reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop] 
+  if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
     frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
     store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
     end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(st.shape))), bottom_up=True).end(*srngs)
