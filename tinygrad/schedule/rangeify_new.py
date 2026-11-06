@@ -142,7 +142,7 @@ def compose_ranges(st:UOp, ind:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
 def fix_store_hazard(ind, dst, src):
-  reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst]
+  if not (reads:=[r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst]): return None
   if IMAGE or any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
     frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
     store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
@@ -151,7 +151,7 @@ def fix_store_hazard(ind, dst, src):
   return None
 
 pm_finalize_graph = PatternMatcher([
-  (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard), 
+  (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
   (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity() else x),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x)
