@@ -81,8 +81,8 @@ pm_split_ranges = PatternMatcher([
 def no_range(u:UOp) -> bool: return not u.op_in_backward_slice_with_self(Ops.RANGE)
 
 def reduce_unparented(red:UOp) -> UOp|None:
-  assert all(x.op is Ops.RANGE for x in red.src[1:]), "some reduce srcs aren't ranges"
-  reduce_parented, reduce_unparented = partition(red.src[1:], lambda x: x in red.src[0].ranges)
+  rngs = [r for r in red.src[1:] if r.op is Ops.RANGE]
+  reduce_parented, reduce_unparented = partition(rngs, lambda x: x in red.src[0].ranges)
   if len(reduce_unparented) == 0: return None
   ret = red.replace(src=(red.src[0],)+tuple(reduce_parented)) if len(reduce_parented) else red.src[0]
   # the op applied n times, MAX and bool ADD/MUL (OR/AND) are idempotent. an empty range is the identity
