@@ -395,7 +395,7 @@ class TestCustomKernel(unittest.TestCase):
     def kernel(out):
       i, j = UOp.range(3, 0, AxisType.LOOP), UOp.range(4, 1, AxisType.LOOP)
       v = (i*10+j).cast(dtypes.int).stage(j, arg=BufferizeOpts(None, space, removable=False))
-      return out[i].store(v.index(2)).end(i).sink()
+      return out[i].store(v.index(2)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     self.assertEqual(Tensor.empty(3, dtype=dtypes.int).custom_kernel(fxn=kernel)[0].tolist(), [2, 12, 22])
   @unittest.skipIf(isinstance(Device[Device.DEFAULT].renderer, PTXRenderer), "PTX does not support dynamic register indexing")
   def test_explicit_stage_free_range_reg(self): self._test_explicit_stage_free_range(AddrSpace.REG)
