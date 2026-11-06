@@ -165,7 +165,7 @@ pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda
 def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
   limit = MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(str(device[0] if isinstance(device:=tsink.device, tuple) else device).split(":")[0], 0)
-  tsink = graph_rewrite(tsink, pm_limit_buffers if limit else pm_kernelize, ctx=({}, device, limit), walk=True, name="kernelize")
+  tsink = graph_rewrite(tsink, pm_limit_buffers if limit else pm_kernelize, ctx=({}, tsink.device, limit), walk=True, name="kernelize")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
   tsink = graph_rewrite(tsink, pm_finalize_indexing+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
