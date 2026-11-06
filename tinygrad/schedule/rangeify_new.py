@@ -96,7 +96,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
       # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
       src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
       if uses.setdefault(s, src_use) is not src_use: uses[s] = Kernelize.RANGES
-    # MSTACk, MSELECT, and custom kernels or program srcs are always kernelized. MSTACK and MSELECT srcs drop their views.
+    # MSTACK, MSELECT, and custom kernel or program srcs are always kernelized. MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo))):
       for s in x.src_without_body:
         if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity() or sb.is_variable): kernvals[sb] = Kernelize.FORCE
@@ -143,10 +143,10 @@ def substitute_ranges(ctx, x:UOp) -> UOp|None:
 
 pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
 
-def compose_ranges(st:UOp, ind:UOp) -> UOp:
+def compose_ranges(ind:UOp, st:UOp) -> UOp:
   return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
 
-def fix_store_hazard(ind, dst, src):
+def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity()) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
   if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
     frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
