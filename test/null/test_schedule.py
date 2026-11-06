@@ -2067,14 +2067,6 @@ class TestBufferView(unittest.TestCase):
     a = Tensor.arange(24).reshape(4, 6).clone().to(devices).realize()
     run_linear(*check_schedule(a.flip(0).contiguous(), 2))
 
-'''
-class TestInvalidTensor(unittest.TestCase):
-  def test_full_invalid_is_zero_kernels(self):
-    from tinygrad.dtype import Invalid
-    t = Tensor.full((4,), Invalid, dtype=dtypes.float)
-    check_schedule(t, 0)
-'''
-
 class TestLimitBufs(unittest.TestCase):
   def test_limit_bufs_linear_scaling(self):
     def sched_time(n):

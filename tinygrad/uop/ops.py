@@ -646,8 +646,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if isinstance(arg, Ops): arg = (arg, 0)
     return UOp(Ops.REDUCE, src=(self,)+src, arg=arg, **kwargs)
 
-  #TODO: remove bufferize
-  def bufferize(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def stage(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def allreduce(self, op, device:str|tuple[str, ...]):
     assert isinstance(self.device, tuple), f"allreduce must be on tuple {self.device} isn't"
@@ -935,7 +933,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   def has_buffer_identity(self, after_ok=True):
     """Check if this UOp has a concrete buffer identity in the graph (RESHAPE/UNSHARD -> BUFFER chain)."""
-    # TODO: does anything break if this returns False for variables?
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)

@@ -163,7 +163,7 @@ def fix_group_for_reduce(x:UOp):
   # do only the non grouped reduces early
   ret = x.replace(src=(x.src[0],)+tuple(reduce_r))
   reduce_loop = [x.replace(arg=(AxisType.WEAK, x.axis_id[0]+100, *x.axis_id[1:])) for x in reduce_gfr]
-  buf = ret.bufferize(*reduce_gfr, arg=BufferizeOpts(None, AddrSpace.LOCAL)).index(*reduce_loop)
+  buf = ret.stage(*reduce_gfr, arg=BufferizeOpts(None, AddrSpace.LOCAL)).index(*reduce_loop)
 
   # do the final reduce (if/barrier are added in gpudims step)
   # NOTE: we remove all horizontal reduces here, they remain in the first reduce

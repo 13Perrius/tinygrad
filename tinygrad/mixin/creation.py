@@ -53,19 +53,6 @@ class CreationMixin(DTypeMixin, MovementMixin):
     """
     return self._wrap_uop(self._uop.empty_like(dtype, device))
 
-  '''
-  @classmethod
-  def invalids(cls, *shape, device:str|tuple[str, ...]|None=None, dtype:DTypeLike|None=None) -> Self:
-    """
-    Creates a tensor with the given shape, filled with Invalid.
-
-    This is an alternative to Tensor.empty when you want an "anonymous" buffer.
-
-    Eventually Tensor.empty will be replaced by this.
-    """
-    return cls.full(argfix(*shape), Invalid, dtype=dtype, device=device)
-  '''
-
   @classmethod
   def full(cls, shape:'tuple[sint, ...]', fill_value:'ConstType|UOp', dtype:DTypeLike|None=None,
            device:str|tuple[str, ...]|None=None, buffer=True) -> Self:

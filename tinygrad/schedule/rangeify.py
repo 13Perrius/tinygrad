@@ -99,15 +99,6 @@ def remove_noop_bufferize(idx,b2):
   if idx.src[1:] != b2.src[1:]: return None
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
-'''
-def after_all_invalid(after:UOp):
-  buf = after.src[0].buf_uop
-  # check all ranges are used (no expand), and same size (no pad and shrink)
-  return all(s.op is Ops.END and (st:=s.src[0]).op is Ops.STORE and st.src[1].base.is_invalid and st.src[0].buf_uop is buf
-    and all(r in st.src[0].ranges for r in s.ended_ranges)
-    and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
-'''
-
 pm_const_buffer_folding = pm_mops+pm_gated_index+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
@@ -169,7 +160,7 @@ class LimitBufsContext:
 def stage(ctx:LimitBufsContext, s:UOp) -> UOp:
   # Insert bufferize: use fresh WEAK ranges, while the DEVICE range stays a launched axis
   end_ranges = [x.replace(arg=(AxisType.WEAK, next(ctx.range_idx))) if x.axis_type is not AxisType.DEVICE else x for x in s.ranges]
-  return s.substitute(dict(zip(s.ranges, end_ranges))).bufferize(*end_ranges, arg=BufferizeOpts(device=s.device)).index(*s.ranges)
+  return s.substitute(dict(zip(s.ranges, end_ranges))).stage(*end_ranges, arg=BufferizeOpts(device=s.device)).index(*s.ranges)
 
 def _limit_bufs(ctx:LimitBufsContext, root:UOp):
   if (device:=root.device) is None: return None # no device, index related calculations

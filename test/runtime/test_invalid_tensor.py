@@ -21,14 +21,6 @@ class TestInvalidTensor(unittest.TestCase):
     out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Invalid)
     self._invalid_test_helper(out, [1.0, 2.0, None, None])
 
-  '''
-  def test_where_padded_invalid_cast(self):
-    # a padded Invalid is not Invalid: its zeros take the cast
-    a, b = Tensor.full((1,), Invalid).pad((1,1)), Tensor.full((1,), Invalid).pad((2,0))
-    out = Tensor([True, False, True]).where(a, b).cast(dtypes.float) + Tensor([1., 2., 3.])
-    self.assertEqual((out.dtype, out.tolist()), (dtypes.float, [1.0, 2.0, 3.0]))
-  '''
-
   def test_where_invalid_x(self):
     mask = Tensor.arange(4) < 2
     out = mask.where(Invalid, Tensor([1.0, 2.0, 3.0, 4.0]))
@@ -78,13 +70,6 @@ class TestInvalidTensor(unittest.TestCase):
     out = (bad < 1).logical_not().where(x + 10, x + 20)
     self._invalid_test_helper(out, [20, 11, None, None])
 
-  '''
-  def test_where_invalid_condition_bare(self):
-    cond = Tensor.full((4,), Invalid, dtype=dtypes.bool, buffer=False)
-    out = cond.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor([10.0, 20.0, 30.0, 40.0]))
-    self._invalid_test_helper(out, [None, None, None, None])
-  '''
-
   def test_where_unary(self):
     mask = Tensor.arange(4) < 2
     out = mask.where(Tensor([1.0, 4.0, 9.0, 16.0]), Invalid).sqrt()
@@ -101,52 +86,10 @@ class TestInvalidTensor(unittest.TestCase):
     out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Invalid).sum()
     self._invalid_test_helper(out, [10.0])
 
-  '''
-  def test_invalid_unary(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor.full((4,), Invalid, dtype=dtypes.float, buffer=False).sqrt())
-    self._invalid_test_helper(out, [1.0, 2.0, None, None])
-  '''
-
-  '''
-  def test_invalid_binary(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor.full((4,), Invalid, dtype=dtypes.float, buffer=False) + 2)
-    self._invalid_test_helper(out, [1.0, 2.0, None, None])
-  '''
-
-  '''
-  def test_invalid_binary_left(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), 2 + Tensor.full((4,), Invalid, dtype=dtypes.float, buffer=False))
-    self._invalid_test_helper(out, [1.0, 2.0, None, None])
-  '''
-
   def test_invalid_reshape(self):
     mask = Tensor.arange(4) < 2
     out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Invalid).reshape(2,2)
     self._invalid_test_helper(out, [1.0, 2.0, None, None])
-
-  '''
-  def test_invalid_cast(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor.full((4,), Invalid, dtype=dtypes.int, buffer=False).cast(dtypes.float))
-    self._invalid_test_helper(out, [1.0, 2.0, None, None])
-  '''
-
-  '''
-  def test_invalid_bitcast(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor.full((4,), Invalid, dtype=dtypes.int, buffer=False).bitcast(dtypes.float))
-    self._invalid_test_helper(out, [1.0, 2.0, None, None])
-  '''
-
-  '''
-  def test_where_bitcast(self):
-    mask = Tensor.arange(4) < 2
-    out = mask.where(Tensor([1.0, 2.0, 3.0, 4.0]), Tensor.full((4,), Invalid, dtype=dtypes.int, buffer=False)).bitcast(dtypes.int)
-    self._invalid_test_helper(out, [0x3f800000, 0x40000000, None, None])
-  '''
 
   def test_tensor_index(self):
     idx = (Tensor.arange(4) < 2).where(Tensor([0, 1, 2, 3]), Invalid)

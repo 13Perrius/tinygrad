@@ -323,7 +323,7 @@ class TestCustomKernel(unittest.TestCase):
     # the STAGE ends j, so the accumulator of the reduce over jj is initialized before the jj loop, not inside it
     def kernel(C:UOp, A:UOp) -> UOp:
       i, j, jj = UOp.range(4, 0), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
-      stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
+      stage = (A[i, j] * 2).stage(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())
@@ -333,7 +333,7 @@ class TestCustomKernel(unittest.TestCase):
     # the STAGE is inside the thread range i, so every thread stages its own row
     def kernel(C:UOp, A:UOp) -> UOp:
       i, j, jj = UOp.range(4, 0, AxisType.LOCAL), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
-      stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
+      stage = (A[i, j] * 2).stage(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())
@@ -343,7 +343,7 @@ class TestCustomKernel(unittest.TestCase):
     # the REG buffer of the STAGE and the accumulator of the reduce are different buffers
     def kernel(C:UOp, A:UOp) -> UOp:
       i, j, jj = UOp.range(4, 0), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
-      stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.REG))
+      stage = (A[i, j] * 2).stage(j, arg=BufferizeOpts(None, AddrSpace.REG))
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())

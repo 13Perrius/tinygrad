@@ -22,19 +22,6 @@ pm_ctx = PatternMatcher([
    any(is_implicit_storage(ctx, b) for b in x.toposort()) else None),
 ])
 
-'''
-def invalid_outputs(uret:UOp) -> set[UOp]:
-  # invalids() returns fresh write-only scratch: a clone storing CONST(Invalid)
-  # don't capture it as an input; only skip fresh buffers, not realized ones
-  return {u.src[0].buf_uop for u in uret.backward_slice_with_self
-          if u.op is Ops.STORE and u.src[1].base.is_invalid and not u.src[0].buf_uop.is_realized}
-
-def renumber_invalid_outputs(uret:UOp) -> UOp:
-  invalid = invalid_outputs(uret)
-  return uret.substitute({b:b.replace(op=Ops.ALLOC, arg=replace(b.arg, slot=i, buffer=None, bind_on_realize=False))
-                          for i,b in enumerate(x for x in uret.toposort() if x in invalid)})
-'''
-
 ReturnType = TypeVar('ReturnType')
 class _function(Generic[ReturnType]):
   depth = 0
@@ -77,9 +64,7 @@ class _function(Generic[ReturnType]):
 
     # caller-owned storage left in the graph becomes implicit inputs
     num_explicit = len(call_uops)
-    # uret = graph_rewrite(uret, pm_ctx, (call_uops, invalid_outputs(uret), alloc_start), bottom_up=True, name="get_implicit_inputs")
     uret = graph_rewrite(uret, pm_ctx, (call_uops, alloc_start), bottom_up=True, name="get_implicit_inputs")
-    # uret = renumber_invalid_outputs(uret)
     name = getattr(self.fxn, '__qualname__', None) or type(self.fxn).__qualname__
     if not self.allow_implicit:
       implicit_buffers = [x for x in call_uops[num_explicit:] if x.op in {Ops.BUFFER, Ops.ALLOC}]
