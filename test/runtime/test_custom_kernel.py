@@ -5,7 +5,7 @@ from tinygrad.codegen import to_program
 import numpy as np
 from tinygrad.dtype import AddrSpace, dtypes
 from tinygrad.helpers import getenv
-from tinygrad.schedule.rangeify import BufferizeOpts
+from tinygrad.schedule.rangeify_old import BufferizeOpts
 from tinygrad.uop.ops import KernelInfo, AxisType, Ops, uopfunc, CustomInfo
 from tinygrad.codegen.opt import Opt, OptOps, KernelOptError
 from tinygrad.renderer.ptx import PTXRenderer

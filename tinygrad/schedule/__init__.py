@@ -5,7 +5,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import GroupOp, UOp, Ops, UOpMetaClass, graph_rewrite, MapCtx, gate_kernel_sink, KernelInfo
 from tinygrad.uop.spec import type_verify, spec_tensor
 from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, SCACHE, BASEDIR, partition, dedup, all_int, VIZ
-from tinygrad.helpers import diskcache_get, diskcache_put, colored, getenv
+from tinygrad.helpers import diskcache_get, diskcache_put, colored
 
 # **** schedule linearizer
 
@@ -83,11 +83,7 @@ from tinygrad.engine.realize import capturing, pm_flatten_linear
 from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
 
-from tinygrad.schedule.rangeify import get_kernel_graph as GKG_OLD
-from tinygrad.schedule.rangeify_new import get_kernel_graph as GKG_NEW
-
-GKG_FXNS = {"OLD":GKG_OLD, "NEW":GKG_NEW}
-get_kernel_graph = GKG_FXNS[getenv("R","NEW")]
+from tinygrad.schedule.rangeify import get_kernel_graph
 
 from tinygrad.helpers import CAPTURING
 from tinygrad.uop.ops import PatternMatcher, UPat

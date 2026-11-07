@@ -485,10 +485,10 @@ class TestConstBufferize(unittest.TestCase):
     """Test that CONST.BUFFERIZE with ranges is folded correctly.
 
     BUFFERIZE can have ranges as additional sources beyond the value.
-    The pattern at rangeify.py uses allow_any_len=True because
+    The pattern at rangeify_old.py uses allow_any_len=True because
     CONST doesn't depend on ranges (constant is same value everywhere).
     """
-    from tinygrad.schedule.rangeify import pm_const_buffer_folding, BufferizeOpts
+    from tinygrad.schedule.rangeify_old import pm_const_buffer_folding, BufferizeOpts
     c = UOp.const(42.0)
     r1 = UOp.range(3, 0)
     bufferize_with_range = c.stage(r1, arg=BufferizeOpts(device=None))
@@ -502,7 +502,7 @@ class TestConstBufferize(unittest.TestCase):
 
   def test_const_bufferize_with_multiple_ranges(self):
     """Test CONST.BUFFERIZE with multiple ranges is also folded."""
-    from tinygrad.schedule.rangeify import pm_const_buffer_folding, BufferizeOpts
+    from tinygrad.schedule.rangeify_old import pm_const_buffer_folding, BufferizeOpts
     c = UOp.const(3.14)
     r1 = UOp.range(3, 0)
     r2 = UOp.range(4, 1)

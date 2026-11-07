@@ -3,8 +3,7 @@ from tinygrad import Tensor, UOp, Device, nn
 from tinygrad.schedule import schedule_cache
 from tinygrad.codegen import to_program, to_program_cache
 from tinygrad.schedule.indexing import apply_movement_op, _apply_reshape
-import tinygrad.schedule.rangeify_new as rangeify_new
-from tinygrad.helpers import getenv
+import tinygrad.schedule.rangeify as rangeify
 from tinygrad.uop.divandmod import fold_divmod_general
 from test.test_tiny import TestTiny
 
@@ -75,9 +74,8 @@ if __name__ == "__main__":
     to_program_cache.clear()
     apply_movement_op.cache_clear()
     _apply_reshape.cache_clear()
-    if getenv("R", "NEW") == "NEW":
-      rangeify_new.apply_movement_op.cache_clear()
-      rangeify_new.apply_reshape.cache_clear()
+    rangeify.apply_movement_op.cache_clear()
+    rangeify.apply_reshape.cache_clear()
     fold_divmod_general.cache_clear()
     Tensor._device_seeds.clear()
     Tensor._device_rng_counters.clear()

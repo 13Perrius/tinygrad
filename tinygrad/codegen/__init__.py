@@ -29,7 +29,7 @@ from tinygrad.codegen.late.coalesce import memory_coalescing, pm_simplify_add_im
 from tinygrad.helpers import all_same, argsort, partition, to_function_name
 from tinygrad.device import TinyELF
 from tinygrad.uop.ops import _broadcast_shape, identity_element
-from tinygrad.schedule.rangeify import BufferizeOpts
+from tinygrad.schedule.rangeify_old import BufferizeOpts
 
 def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
