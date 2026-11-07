@@ -90,7 +90,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
   kernvals: dict[UOp, Kernelize] = {}
   for x in reversed(tsink.toposort()):
     if (is_k:=isinstance(use:=uses[x], Kernelize)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: kernvals.setdefault(x, use)
-    # A kernel, a movement op, or a REDUCE are all distinct uses. >2 distinct uses => candidate for kernelization.
+    # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => candidate for kernelization.
     if x in kernvals or x.has_buffer_identity() or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_k): use = x
     for s in x.src:
       # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
@@ -122,7 +122,7 @@ def kernelize(ctx, x:UOp) -> UOp:
       if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
         ret = (a:=UOp.alloc(x.shape, x.dtype, device=ctx[1] if x.device is None else x.device)).base.after(a.store(x.src[0])).view_as(x.shape)
         bufs, red = [ret], False
-      # If a uop is staged with RANGES, it has >2 distinct uses so it stays staged. This prevents the graph from blowing up during range-pushing.
+      # If a uop is staged with RANGES, it has >=2 distinct uses so it stays staged. This prevents the graph from blowing up during range-pushing.
       elif k is not Kernelize.RANGES or x.max_numel() == 1: ret = x.src[0]
     info[ret] = (bufs, red)
   return ret
