@@ -39,7 +39,7 @@ class TestRangeifyEdgeCase(unittest.TestCase):
     self.assertEqual(Tensor((Tensor([1, 2, 3]).realize().uop + 1).index(v)).item(), 3)
     self.assertEqual(Tensor(Tensor([1, 2, 3]).realize().uop.index(v)).item(), 2)
     self.assertEqual(Tensor(Tensor([1, 2, 3]).realize().uop.index(Tensor([2]).realize()[0].uop % 3)).item(), 3)
-    #NOTE: these tests need to go, an invalid read =/= 0 
+    #NOTE: these tests need to go, an invalid read =/= 0
     '''
     self.assertEqual([Tensor((Tensor([1, 2, 3]).realize().uop + 1).pad(((1, 1),)).index(Variable("p", 0, 4).bind(i))).item() for i in range(5)],
                      [0, 2, 3, 4, 0])
