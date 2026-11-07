@@ -65,7 +65,7 @@ pm_push_ranges = PatternMatcher([
 ])
 
 def stack_select(rcmp, srcs):
-  # MSB-first bit tree
+  # MSB-first bit tree.
   if len(srcs) == 1: return srcs[0]
   half = 1 << ((len(srcs)-1).bit_length()-1)
   return (rcmp % (2*half) < half).where(stack_select(rcmp, srcs[:half]), stack_select(rcmp, srcs[half:]))
@@ -192,7 +192,6 @@ def get_kernel_graph(tsink:UOp) -> UOp:
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
   if SPEC:
-    # Validate the kernel graph.
     from tinygrad.uop.spec import type_verify, spec_kernel_graph
     type_verify(tsink, spec_kernel_graph)
   return tsink
