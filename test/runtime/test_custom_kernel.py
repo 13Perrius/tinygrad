@@ -606,8 +606,8 @@ class TestCustomKernel(unittest.TestCase):
     self.assertTrue(all(x == 5 for x in result), f"expected all 5.0, got {result}")
 
   @unittest.skip("what are anonymous buffers?")
-  def test_anonymous_buffers_in_function(self):
-    """Test that custom kernels with anonymous output buffers work inside @function."""
+  def test_call_scoped_storage_in_function(self):
+    """Test that custom kernels with call-scoped storage work inside @function."""
     a = Tensor.full((4, 4), 3.).contiguous()
     b = Tensor.full((4, 4), 2.).contiguous()
     Tensor.realize(a, b)
@@ -622,8 +622,8 @@ class TestCustomKernel(unittest.TestCase):
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor, w:Tensor) -> Tensor:
-      out = Tensor.invalids(*x.shape, dtype=x.dtype)
-      tmp = Tensor.invalids(*x.shape, dtype=x.dtype)
+      out = Tensor.empty(*x.shape, dtype=x.dtype)
+      tmp = Tensor.empty(*x.shape, dtype=x.dtype)
       out, tmp = Tensor.custom_kernel(out, tmp, x, w, fxn=custom_add_with_tmp)[:2]
       return out+tmp
 
@@ -668,7 +668,7 @@ class TestCustomKernel(unittest.TestCase):
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor) -> Tensor:
-      y = Tensor.invalids(*x.shape, dtype=x.dtype)
+      y = Tensor.empty(*x.shape, dtype=x.dtype)
       return Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x[0]).realize()
@@ -1059,7 +1059,7 @@ class TestCustomKernelInput(unittest.TestCase):
     @function(precompile=True)
     def run(a:Tensor) -> Tensor:
       xv = mop_fxn(a)
-      y = Tensor.invalids(*xv.shape, dtype=xv.dtype, device=a.device)
+      y = Tensor.empty(*xv.shape, dtype=xv.dtype, device=a.device)
       return Tensor.custom_kernel(y, xv, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x0).realize()
