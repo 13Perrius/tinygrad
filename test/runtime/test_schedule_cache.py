@@ -8,7 +8,7 @@ def custom_add_kernel(A:UOp, B:UOp, num:int=0) -> UOp:
   return A[0].set(B[0] + num).sink(arg=KernelInfo(f"custom_add_{num}"))
 
 def custom_add_backward(grad_output:UOp, _) -> tuple[None, UOp]:
-  grad = Tensor.invalids(*grad_output.shape, dtype=grad_output.dtype, device=grad_output.device)
+  grad = Tensor.empty(*grad_output.shape, dtype=grad_output.dtype, device=grad_output.device)
   grad = Tensor.custom_kernel(grad, Tensor(grad_output, device=grad_output.device), fxn=functools.partial(custom_add_kernel, num=0))[0]
   return None, grad.uop
 
@@ -83,7 +83,7 @@ class TestScheduleCache(unittest.TestCase):
   def test_simple_precompile(self):
     @function(precompile=True, precompile_backward=True)
     def f(x:Tensor) -> Tensor:
-      out = Tensor.invalids(*x.shape, dtype=x.dtype, device=x.device)
+      out = Tensor.empty(*x.shape, dtype=x.dtype, device=x.device)
       out = Tensor.custom_kernel(out, x, fxn=functools.partial(custom_add_kernel, num=10), grad_fxn=custom_add_backward)[0]
       return out + x
 

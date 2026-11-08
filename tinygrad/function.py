@@ -7,14 +7,13 @@ from tinygrad.tensor import Tensor
 from tinygrad.nn.state import get_state_dict
 
 def add_to_ctx(ctx, x:UOp):
-  if x.buf_uop in ctx[1]: return None
   ret = x.param_like(len(ctx[0]))
   ctx[0].append(x)
   return ret
 
 def is_implicit_storage(ctx, x:UOp) -> bool:
   # Variables are caller-provided values (slot -1); positional scalar params (slot >= 0) are already captured
-  return (x.is_variable and x.arg.slot == -1) or x.op is Ops.BUFFER or (x.op is Ops.ALLOC and x.arg.bind_on_realize and x.arg.slot < ctx[2])
+  return (x.is_variable and x.arg.slot == -1) or x.op is Ops.BUFFER or (x.op is Ops.ALLOC and x.arg.bind_on_realize and x.arg.slot < ctx[1])
 
 pm_ctx = PatternMatcher([
   # Capture caller-owned storage, not allocations created while tracing this function.
@@ -23,17 +22,6 @@ pm_ctx = PatternMatcher([
    not any(p.op is Ops.PARAM and p.arg.slot >= 0 for p in x.backward_slice) and
    any(is_implicit_storage(ctx, b) for b in x.toposort()) else None),
 ])
-
-def invalid_outputs(uret:UOp) -> set[UOp]:
-  # invalids() returns fresh write-only scratch: a clone storing CONST(Invalid)
-  # don't capture it as an input; only skip fresh buffers, not realized ones
-  return {u.src[0].buf_uop for u in uret.backward_slice_with_self
-          if u.op is Ops.STORE and u.src[1].base.is_invalid and not u.src[0].buf_uop.is_realized}
-
-def renumber_invalid_outputs(uret:UOp) -> UOp:
-  invalid = invalid_outputs(uret)
-  return uret.substitute({b:b.replace(op=Ops.ALLOC, arg=replace(b.arg, slot=i, buffer=None, bind_on_realize=False))
-                          for i,b in enumerate(x for x in uret.toposort() if x in invalid)})
 
 ReturnType = TypeVar('ReturnType')
 class _function(Generic[ReturnType]):
@@ -77,8 +65,7 @@ class _function(Generic[ReturnType]):
 
     # caller-owned storage left in the graph becomes implicit inputs
     num_explicit = len(call_uops)
-    uret = graph_rewrite(uret, pm_ctx, (call_uops, invalid_outputs(uret), alloc_start), bottom_up=True, name="get_implicit_inputs")
-    uret = renumber_invalid_outputs(uret)
+    uret = graph_rewrite(uret, pm_ctx, (call_uops, alloc_start), bottom_up=True, name="get_implicit_inputs")
     name = getattr(self.fxn, '__qualname__', None) or type(self.fxn).__qualname__
     if not self.allow_implicit:
       implicit_buffers = [x for x in call_uops[num_explicit:] if x.op in {Ops.BUFFER, Ops.ALLOC}]

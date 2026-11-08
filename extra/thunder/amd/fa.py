@@ -10,11 +10,11 @@ from tinygrad.uop.ops import UOp, Ops, KernelInfo
 
 def _sharded_empty(shape:Tensor, ref:Tensor, axis:int|None, dtype:DTypeLike|None=None) -> Tensor:
   dtype = dtype or ref.dtype
-  if not isinstance(ref.device, tuple): return Tensor.invalids(*shape, dtype=dtype, device=ref.device)
+  if not isinstance(ref.device, tuple): return Tensor.empty(*shape, dtype=dtype, device=ref.device)
   shard_axis = ref.uop.axis if axis is None else axis
   shape = tuple(s // len(ref.device) if i == shard_axis else s for i, s in enumerate(shape))
   axis = ref.uop.axis if axis is None else axis
-  return Tensor(Tensor.invalids(*shape, dtype=dtype, device=ref.device).uop.unshard(axis), dtype=dtype, device=ref.device)
+  return Tensor(Tensor.empty(*shape, dtype=dtype, device=ref.device).uop.unshard(axis), dtype=dtype, device=ref.device)
 
 @functools.cache
 def custom_fused_qkv_rope_forward(q:UOp, k:UOp, v:UOp, xqkv:UOp, freqs_cis:UOp,
