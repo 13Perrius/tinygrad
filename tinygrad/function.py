@@ -1,5 +1,4 @@
 import functools, time
-from dataclasses import replace
 from typing import Generic, TypeVar, Callable, cast, overload
 from tinygrad.helpers import Context, dedup, getenv, DEBUG
 from tinygrad.uop.ops import UOp, Ops, GroupOp, graph_rewrite, PatternMatcher, UPat
