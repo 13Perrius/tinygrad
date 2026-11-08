@@ -2,7 +2,7 @@ import numpy as np
 import unittest
 from tinygrad.function import function
 from tinygrad import Tensor, TinyJit, GlobalCounters, Device
-from tinygrad.dtype import AddrSpace, Invalid, dtypes
+from tinygrad.dtype import AddrSpace, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.codegen import to_program
 from test.helpers import assert_kernel_count, KernelCountException
@@ -600,7 +600,7 @@ class TestFunctionTuple(unittest.TestCase):
     np.testing.assert_allclose(a.grad.numpy(), [2., 2., 2., 2.])
 
   def test_custom_kernel_precompile_multidevice(self):
-    # call-scoped storage in a custom kernel under multi-device @function(precompile=True) must return the 
+    # call-scoped storage in a custom kernel under multi-device @function(precompile=True) must return the
     # kernel's computed result. read it back through .numpy() so the cross-device gather reads the output buffer
     devs = ("CPU:0", "CPU:1")
     def double_kernel(C:UOp, A:UOp) -> UOp:
@@ -668,7 +668,7 @@ class TestFunctionTuple(unittest.TestCase):
   def test_realized_buffer_is_captured(self):
     state = Tensor([10., 20., 30., 40.]).contiguous().realize()
     @function(precompile=True, allow_implicit=False)
-    def f(a:Tensor): return state + a 
+    def f(a:Tensor): return state + a
     with self.assertRaisesRegex(RuntimeError, "implicit buffer"):
       out = f(Tensor([1., 1., 1., 1.]).contiguous().realize())
       np.testing.assert_allclose(out.numpy(), [11., 21., 31., 41.])
