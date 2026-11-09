@@ -924,7 +924,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in GroupOp.Defines and not self.is_variable
+    return self.op in GroupOp.Defines and not self.addrspace is AddrSpace.ALU
 
   @functools.cached_property
   def _buffer_view(self) -> tuple[UOp, int]:
