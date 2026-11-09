@@ -645,6 +645,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return UOp(Ops.REDUCE, src=(self,)+src, arg=arg, **kwargs)
 
   def bufferize(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
+  def stage(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def allreduce(self, op, device:str|tuple[str, ...]):
     assert isinstance(self.device, tuple), f"allreduce must be on tuple {self.device} isn't"
     return UOp(Ops.ALLREDUCE, src=(self,), arg=(op, device))
@@ -849,7 +850,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @recursive_property
   def device(self) -> str|tuple[str, ...]|None:
     if self.op is Ops.PARAM: return self.arg.device
-    if self.op is Ops.STAGE: return self.src[0].device if self.arg is None else self.arg.device
+    if self.op is Ops.STAGE: return self.src[0].device 
     if self.op is Ops.AFTER: return self.src[0].device
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
@@ -918,10 +919,10 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   def has_buffer_identity(self, after_ok=False):
     """Check if this UOp has a storage identity in the graph, whether or not its buffer is bound."""
-    # TODO: this is confusing because UOp.variable('v', 0, 1, dtypes.weakfloat) is True for jit to work, but it doesn't have a buffer
+    if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in GroupOp.Defines
+    return self.op in GroupOp.Defines and not self.is_variable
 
   @functools.cached_property
   def _buffer_view(self) -> tuple[UOp, int]:
@@ -1476,6 +1477,7 @@ class UPat(RandMixin):
     if dtype is not None and self.match_dtype == (dtype,): return self
     return UPat(Ops.CAST, dtype, (self,), **kwargs)
   def bitcast(self, dtype=None): return UPat(Ops.BITCAST, dtype, (self,))
+  def stage(self, *src:UPat, **kwargs): return UPat(Ops.STAGE, src=(self,)+src, **kwargs)
   def load(self, *src:UPat, **kwargs): return UPat(Ops.LOAD, src=(self,)+src, **kwargs)
   def store(self, *src:UPat, **kwargs): return UPat(Ops.STORE, src=(self,)+src, **kwargs)
   def reduce(self, *src:UPat, **kwargs):
