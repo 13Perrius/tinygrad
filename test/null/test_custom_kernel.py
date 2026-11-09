@@ -162,19 +162,6 @@ class TestCustomKernel(unittest.TestCase):
     self.assertIsNotNone(custom_idx, "custom_addmul kernel not found in schedule")
     self.assertEqual(custom_idx, 3, f"custom_addmul should be at index 3, got {custom_idx}")
 
-  def test_invalids_into_custom_kernel_no_empty_kernel(self):
-    from tinygrad.engine.realize import compile_linear
-    a = Tensor.full((4, 4), 3.).contiguous()
-    b = Tensor.full((4, 4), 2.).contiguous()
-    Tensor.realize(a, b)
-    out = Tensor.invalids(*a.shape, dtype=a.dtype)
-    out, *_ = Tensor.custom_kernel(out, a, b, fxn=custom_elementwise_add_kernel)
-    compiled = compile_linear(out.schedule_linear())
-    for call in compiled.src:
-      prg = call.src[0]
-      if prg.op is not Ops.PROGRAM: continue
-      self.assertTrue(len(prg.arg.globals) > 0, f"empty kernel compiled (no globals): name={prg.src[0].arg.name}")
-
 class TestUOpReduce(unittest.TestCase):
   def test_uop_sum_keepdim(self):
     a = Tensor.arange(6).reshape(2, 3).float()

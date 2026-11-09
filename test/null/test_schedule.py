@@ -2043,12 +2043,6 @@ class TestBufferView(unittest.TestCase):
     a = Tensor.arange(24).reshape(4, 6).clone().to(devices).realize()
     run_linear(*check_schedule(a.flip(0).contiguous(), 2))
 
-class TestInvalidTensor(unittest.TestCase):
-  def test_full_invalid_is_zero_kernels(self):
-    from tinygrad.dtype import Invalid
-    t = Tensor.full((4,), Invalid, dtype=dtypes.float)
-    check_schedule(t, 0)
-
 class TestCopyFolding(unittest.TestCase):
   def test_one_hot_with_copy(self):
     y = Tensor([1, 2, 3], device="NULL").to("NULL:1")

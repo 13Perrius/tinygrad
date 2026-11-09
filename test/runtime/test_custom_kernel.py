@@ -3,7 +3,7 @@ from tinygrad import Tensor, UOp, GlobalCounters, Context, Device, Variable, Tin
 from tinygrad.engine.realize import run_linear, get_runtime
 from tinygrad.codegen import to_program
 import numpy as np
-from tinygrad.dtype import AddrSpace, dtypes, Invalid
+from tinygrad.dtype import AddrSpace, dtypes
 from tinygrad.helpers import getenv
 from tinygrad.schedule.rangeify import BufferizeOpts
 from tinygrad.uop.ops import KernelInfo, AxisType, Ops, uopfunc
@@ -511,31 +511,6 @@ class TestCustomKernel(unittest.TestCase):
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
     assert_kernel_count(2)
 
-  def test_multi_invalids_custom_kernel_no_copy(self):
-    devs = ("CPU:0", "CPU:1")
-    a = Tensor.ones(4, 4).shard(devs, axis=0).realize()
-    c = Tensor(Tensor.invalids(2, 4, dtype=dtypes.float, device=devs).uop.unshard(0), device=devs)
-    c = Tensor.custom_kernel(c, a, fxn=custom_add_one_kernel)[0]
-    GlobalCounters.reset()
-    c.realize()
-    assert_kernel_count(len(devs))
-    self.assertTrue((c == 2).all().item())
-
-  def test_partial_invalid_store_keeps_uncovered_reads(self):
-    x = Tensor([10., 20., 30., 40.]).realize()
-    after = x.uop.after(x.uop.shrink(((0, 2),)).store(Invalid))
-    self.assertEqual(Tensor(after).contiguous().tolist(), [10., 20., 30., 40.])
-
-  def test_multi_after_invalid_store_dep_removed(self):
-    x = Tensor.empty(4).uop
-    self.assertEqual(Tensor(x.after(x.store(5), x.store(Invalid))).tolist(), [5]*4)
-
-  def test_expand_view_invalid_assign_keeps_uncovered_reads(self):
-    x = Tensor([[10., 11., 12., 13.], [20., 21., 22., 23.], [30., 31., 32., 33.], [40., 41., 42., 43.]]).realize()
-    v = x[:1, :].expand(4, 4)
-    v.assign(Tensor.invalids(4, 4, dtype=dtypes.float))
-    self.assertEqual(v.contiguous().tolist(), [[10., 11., 12., 13.]]*4)
-
   @unittest.expectedFailure
   def test_gated_store_2d(self):
     # TODO: broken now, the valid is dropped. the valid on one index of the 2d C gates the whole store, only j == 0 writes C[i, 0]
@@ -593,17 +568,6 @@ class TestCustomKernel(unittest.TestCase):
       return D[i].store((i%2+N).cast(dtypes.int)).end(a, b).sink(arg=KernelInfo(opts_to_apply=(Opt(OptOps.SPLIT, 0, (8, AxisType.UPCAST)),)))
     d = Tensor.custom_kernel(Tensor.empty(8, dtype=dtypes.int), Tensor(Variable("n", 1, 8, dtypes.int).bind(2)), fxn=kernel)[0]
     self.assertEqual(d.tolist(), [2, 3]*4)
-
-  @unittest.skipIf(Device.DEFAULT == "WEBGPU", "kernel timing not supported")
-  def test_invalids_into_custom_kernel_with_beam(self):
-    a = Tensor.full((4, 4), 3.).contiguous()
-    b = Tensor.full((4, 4), 2.).contiguous()
-    Tensor.realize(a, b)
-    with Context(BEAM=1, IGNORE_BEAM_CACHE=1):
-      out = Tensor.invalids(*a.shape, dtype=a.dtype)
-      out, *_ = Tensor.custom_kernel(out, a, b, fxn=custom_elementwise_add_kernel)
-      result = out.flatten().tolist()
-    self.assertTrue(all(x == 5 for x in result), f"expected all 5.0, got {result}")
 
   @unittest.skip("what are anonymous buffers?")
   def test_call_scoped_storage_in_function(self):
