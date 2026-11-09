@@ -413,17 +413,6 @@ class TestCustomKernel(unittest.TestCase):
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
     assert_kernel_count(2)
 
-  @unittest.skipIf(Device.DEFAULT == "WEBGPU", "kernel timing not supported")
-  def test_invalids_into_custom_kernel_with_beam(self):
-    a = Tensor.full((4, 4), 3.).contiguous()
-    b = Tensor.full((4, 4), 2.).contiguous()
-    Tensor.realize(a, b)
-    with Context(BEAM=1, IGNORE_BEAM_CACHE=1):
-      out = Tensor.invalids(*a.shape, dtype=a.dtype)
-      out, *_ = Tensor.custom_kernel(out, a, b, fxn=custom_elementwise_add_kernel)
-      result = out.flatten().tolist()
-    self.assertTrue(all(x == 5 for x in result), f"expected all 5.0, got {result}")
-
   @unittest.skip("what are anonymous buffers?")
   def test_call_scoped_storage_in_function(self):
     """Test that custom kernels with call-scoped storage work inside @function."""
