@@ -370,7 +370,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       case Ops.PYLITERAL: return None
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        if getenv("R","NEW") == "OLD":
+          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
+        return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
       case Ops.WMMA:
@@ -1158,7 +1160,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     ret = UOp(Ops.ALLOC, src=(shape_to_shape_arg((prod(to_max_shape(shape)),)),)+UOp.device_range_src(device),
               arg=ParamArg(next(UOp.unique_num) if slot is None else slot, strong_dtype(dtype),
                            addrspace=addrspace, device=device, spec=spec, bind_on_realize=bind_on_realize, name=name))
-    return ret.reshape(()) if not shape else ret.view_as(shape, axis)
+    return ret.view_as(shape, axis)
   def alloc_like(self, slot:int|None=None, addrspace=AddrSpace.GLOBAL): return UOp.alloc(self.max_shard_shape, self.dtype, slot, addrspace)
 
   @staticmethod
@@ -1203,7 +1205,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def view_as(self:UOp, shape:tuple[sint, ...], axis:int|None=None) -> UOp:
     """view flat storage as the given (possibly symbolic) shape, optionally sharded on axis, the UNSHARD gives back the multiplied shape"""
     max_shape = to_max_shape(shape)
-    ret = self.reshape(max_shape) if shape else self
+    ret = self.reshape(max_shape) 
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 
