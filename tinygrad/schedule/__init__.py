@@ -5,7 +5,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import GroupOp, UOp, Ops, UOpMetaClass, graph_rewrite, MapCtx, gate_kernel_sink, KernelInfo
 from tinygrad.uop.spec import type_verify, spec_tensor
 from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, SCACHE, BASEDIR, partition, dedup, all_int, VIZ
-from tinygrad.helpers import diskcache_get, diskcache_put, colored
+from tinygrad.helpers import diskcache_get, diskcache_put, colored, getenv
 
 # **** schedule linearizer
 
@@ -89,9 +89,13 @@ from tinygrad.schedule.memory import memory_plan_rewrite
 from tinygrad.engine.realize import capturing, pm_flatten_linear
 from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
-from tinygrad.schedule.rangeify import get_kernel_graph
+from tinygrad.schedule.rangeify import get_kernel_graph as get_kernel_graph_old
+from tinygrad.schedule.rangeify_new import get_kernel_graph as get_kernel_graph_new
 from tinygrad.helpers import CAPTURING
 from tinygrad.uop.ops import PatternMatcher, UPat
+
+GKG_FXNS = {"OLD":get_kernel_graph_old, "NEW":get_kernel_graph_new}
+get_kernel_graph = GKG_FXNS[getenv("R","NEW")]
 
 def create_new_buffer(ctx:tuple[UOp, ...], b:UOp):
   device = b.device if b.device is not None else next(a.device for a in ctx if a.device is not None)
