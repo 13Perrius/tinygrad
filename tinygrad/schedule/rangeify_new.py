@@ -16,7 +16,7 @@ def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
 
 pm_add_ranges = PatternMatcher([
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
-  (UPat.var("x").stage(name="st"), lambda st, x: x.index(*(r:=new_ranges(x.shape))).stage(*r)),
+  (UPat.var("x").stage(name="stg"), lambda stg, x: x.index(*(r:=new_ranges(x.shape))).stage(*r) if stg.arg is None else None),
   (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg))
 ])
 
@@ -83,9 +83,8 @@ def count_buffers(tsink:UOp) -> dict[UOp, Stageable]:
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
     if x.op is Ops.REDUCE and bufs: red = True
     if (v:=stageable.get(x)) is not None:
-      if v is Stageable.FORCE or len(bufs) > 3 or red:
-        stageable[x] = Stageable.FORCE
-        bufs, red = [x], False
+      if (len(bufs) > 3 or red) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
+      if v is Stageable.FORCE: bufs, red = [x], False
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (bufs, red)
   return stageable
@@ -107,7 +106,7 @@ def stage_to_store(stg:UOp):
   if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
   return (a:=UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)).base.after(a.store(stg.src[0])).view_as(stg.shape)
 
-pm_stage_to_anon_store = PatternMatcher([
+pm_stage_to_store = PatternMatcher([
   (UPat(Ops.STAGE, name="stg"), stage_to_store),
   (UPat((Ops.MSELECT, Ops.MSTACK), name="m"), lambda m: m.replace(src=tuple(s.base for s in m.src)).view_as(m.shape))
 ])
@@ -134,6 +133,9 @@ pm_finalize_graph = PatternMatcher([
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
+  (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP)),
+  (UPat(Ops.NOOP, name="n").end(allow_any_len=True), lambda n: n),
+  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=tuple(s for s in r.src if s.op is not Ops.CONST))),
   # This is where a stage inserted via Stageable.RANGES is removed.
   (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None)
 ])
@@ -158,7 +160,7 @@ pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda
 
 def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_insert_stages, ctx=StageCtx(count_buffers(tsink), tsink.device), bottom_up=True, name="insert stages")
-  tsink = graph_rewrite(tsink, pm_stage_to_anon_store, walk=True, name="stage to anon store")
+  tsink = graph_rewrite(tsink, pm_stage_to_store, walk=True, name="stage to store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
   tsink = graph_rewrite(tsink, pm_finalize_graph+pm_mops+symbolic+pm_reduce_simplify, name="finalize graph")
