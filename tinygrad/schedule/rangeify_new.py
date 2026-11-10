@@ -1,41 +1,12 @@
 import itertools, functools
+from dataclasses import dataclass, field
 from enum import Enum
-from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint
+from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint, AddrSpace
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC, DEV
 from tinygrad.schedule.prepare import pm_mops
-
-@functools.cache
-def apply_reshape(in_shape:tuple[sint, ...], out_shape:tuple[sint, ...], urngs:UOp) -> UOp:
-  acc:sint = 1
-  axes_in:list[UOp] = []
-  for sz,r in reversed(tuple(zip(out_shape, urngs.src))):
-    axes_in.append(acc*r)
-    acc *= sz
-  combined_axes = UOp.const(0).usum(axes_in)
-  axes_out:list[UOp] = []
-  for sz in reversed(in_shape):
-    axes_out.append(combined_axes % sz)
-    combined_axes //= sz
-  # This simplify is doing a lot of heavy lifting. This is the replacement for the reshape view merging code.
-  return graph_rewrite(UOp.sink(*reversed(axes_out)), symbolic+pm_simplify_valid+pm_drop_and_clauses, name="reshape")
-
-@functools.cache
-def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
-  match op:
-    case Ops.PERMUTE: return tuple(rngs[p] for p in argsort(arg))
-    case Ops.EXPAND: return rngs[len(arg):]
-    case Ops.PAD:
-      # Pad conversion should solely use the new valid, so only the condition is rewritten.
-      return tuple(r if (sz == sh and off == 0) else (r-off).valid(graph_rewrite((r >= off) & (r < (sh+off)),
-        symbolic+pm_simplify_valid, name="pad")) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
-    case Ops.RESHAPE:
-      sink = UOp.sink(*rngs).simplify() # This applies any commutative flips to the ranges early.
-      subs = {r:r.replace(arg=(AxisType.PLACEHOLDER, i)) for i,r in enumerate(sink.ranges)}
-      return apply_reshape(in_shape, arg, sink.substitute(subs)).substitute({v:k for k,v in subs.items()}).src
-    case Ops.SHRINK: return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
-    case _: raise RuntimeError(f"{op} is not a MovementOp")
+from tinygrad.schedule.indexing_new import apply_reshape, apply_movement_op, StageOpts
 
 def new_ranges(shape:tuple[sint, ...], rid=itertools.count(0)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, next(rid)) for sz in shape)
 
@@ -82,59 +53,64 @@ pm_convert_ranges = PatternMatcher([
   (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_pad_to_where)
 ])
 
-# A STAGE with a Kernelize arg is a candidate for kernelization.
-Kernelize = Enum('Kernelize', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
+Stageable = Enum('Stageable', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
 
-def count_uses(tsink:UOp) -> dict[UOp, Kernelize]:
-  uses: dict[UOp, UOp|Kernelize] = {tsink:tsink}
-  kernvals: dict[UOp, Kernelize] = {}
+def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
+  uses: dict[UOp, UOp|Stageable] = {tsink:tsink}
+  stageable: dict[UOp, Stageable] = {}
   for x in reversed(tsink.toposort()):
-    if (is_k:=isinstance(use:=uses[x], Kernelize)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: kernvals.setdefault(x, use)
-    # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => candidate for kernelization.
-    if x in kernvals or x.has_buffer_identity(after_ok=True) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_k): use = x
+    if (is_stageable:=isinstance(use:=uses[x], Stageable)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: stageable.setdefault(x, use)
+    # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => stageable. 
+    if x in stageable or x.has_buffer_identity(after_ok=True) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_stageable): use = x
     for s in x.src:
       # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
-      src_use = Kernelize.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
-      if uses.setdefault(s, src_use) is not src_use: uses[s] = Kernelize.RANGES
-    # MSTACK, MSELECT, and custom kernel or program srcs are always kernelized. MSTACK and MSELECT srcs drop their views.
+      src_use = Stageable.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
+      if uses.setdefault(s, src_use) is not src_use: uses[s] = Stageable.RANGES
+    # MSTACK, MSELECT, and custom kernel or program srcs are always staged. MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo))):
       for s in x.src_without_body:
-        if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity(after_ok=True) or sb.is_variable): kernvals[sb] = Kernelize.FORCE
-  return kernvals
+        if not ((sb:=s if x.op is Ops.CALL else s.base).has_buffer_identity(after_ok=True) or sb.is_variable): stageable[sb] = Stageable.FORCE
+  return stageable
 
-pm_insert_stages = PatternMatcher([
-  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), lambda ctx, x: x.replace(src=tuple(s if (k:=ctx.get(s)) is None else s.stage(arg=k) for s in x.src)))
-])
-
-def kernelize(ctx, x:UOp) -> UOp:
-  ret = x
-  info: dict[UOp, tuple[list[UOp], bool]] = ctx[0]
-  if x.op is Ops.MSTACK or x.op is Ops.MSELECT:
-    info[ret] = ([ret:=x.replace(src=tuple(s.base for s in x.src)).view_as(x.shape)], False)
-  elif x.has_buffer_identity(after_ok=True) or x.op is Ops.CALL:
-    info[ret] = ([ret], False)
-  else:
+def count_buffers(tsink:UOp) -> dict[UOp, Stageable]:
+  info: dict[UOp, tuple[list[UOp], bool]] = {}
+  stageable = count_uses(tsink)
+  for x in tsink.toposort():
+    if x.has_buffer_identity(after_ok=True) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL}:
+      info[x] = ([x], False)
+      continue
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
     if x.op is Ops.REDUCE and bufs: red = True
-    elif x.op is Ops.STAGE:
-      if (k:=x.arg) is Kernelize.FORCE or len(bufs) > 3 or red:
-        ret = (a:=UOp.alloc(x.shape, x.dtype, device=ctx[1] if x.device is None else x.device)).base.after(a.store(x.src[0])).view_as(x.shape)
-        bufs, red = [ret], False
-      # If a uop is staged with RANGES, it has >=2 distinct uses so it stays staged. This prevents the graph from blowing up during range-pushing.
-      elif k is not Kernelize.RANGES or x.max_numel() == 1: ret = x.src[0]
-    info[ret] = (bufs, red)
-  return ret
+    if (v:=stageable.get(x)) is not None:
+      if v is Stageable.FORCE or len(bufs) > 3 or red:
+        stageable[x] = Stageable.FORCE
+        bufs, red = [x], False
+      elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
+    info[x] = (bufs, red)
+  return stageable
 
-pm_kernelize = PatternMatcher([(UPat(GroupOp.All, name="x"), kernelize)])
+@dataclass
+class StageCtx:
+  stageable: dict[UOp, Stageable]
+  device: str|tuple[str, ...]
 
-def limit_buffers(ctx, x:UOp) -> UOp:
-  if len(ctx[0][res:=kernelize(ctx, x)][0]) < ctx[2] or x.op not in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK,Ops.STACK}: return res
-  if x.op is Ops.STACK and (n:=len(x.src)) >= ctx[2]:
-    return graph_rewrite(UOp.stack(*x.src[:n//2]).cat(UOp.stack(*x.src[n//2:])), pm_limit_buffers, ctx=ctx, walk=True)
-  return kernelize(ctx, x.replace(src=tuple(kernelize(ctx, s.stage(arg=Kernelize.FORCE)) if len(ctx[0][s][0]) > 1 else s for s in x.src)))
+def insert_stage(ctx, s): 
+  if (v:=ctx.stageable.get(s)) is None: return s
+  return s.stage(arg=StageOpts(device=ctx.device if s.device is None else s.device) if v is Stageable.FORCE else None)
 
-pm_limit_buffers = PatternMatcher([(UPat(GroupOp.All, name="x"), limit_buffers)])
+pm_insert_stages = PatternMatcher([
+  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), lambda ctx, x: x.replace(src=tuple(insert_stage(ctx, s) for s in x.src))) 
+])
+
+def stage_to_store(stg:UOp):
+  if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
+  return (a:=UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)).base.after(a.store(stg.src[0])).view_as(stg.shape)
+
+pm_stage_to_anon_store = PatternMatcher([
+  (UPat(Ops.STAGE, name="stg"), stage_to_store),
+  (UPat((Ops.MSELECT, Ops.MSTACK), name="m"), lambda m: m.replace(src=tuple(s.base for s in m.src)).view_as(m.shape))
+])
 
 def substitute_ranges(ctx, x:UOp) -> UOp|None:
   if not any(r in ctx for r in x.ranges): raise BottomUpGate()
@@ -142,8 +118,8 @@ def substitute_ranges(ctx, x:UOp) -> UOp|None:
 
 pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
 
-def compose_ranges(ind:UOp, st:UOp) -> UOp:
-  return graph_rewrite(st.src[0], pm_substitute_ranges, ctx=dict(zip(st.src[1:], ind.src[1:])), bottom_up=True)
+def compose_ranges(ind:UOp, stg:UOp) -> UOp:
+  return graph_rewrite(stg.src[0], pm_substitute_ranges, ctx=dict(zip(stg.src[1:], ind.src[1:])), bottom_up=True)
 
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
@@ -158,8 +134,8 @@ pm_finalize_graph = PatternMatcher([
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
-  # This is where staged ranges are removed.
-  (UPat(Ops.STAGE, name="st").index(name="ind", allow_any_len=True), compose_ranges)
+  # This is where a stage inserted via Stageable.RANGES is removed.
+  (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None)
 ])
 
 def add_arg(ctx, x:UOp) -> UOp|None:
@@ -181,9 +157,8 @@ def split_kernels(s:UOp) -> UOp:
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink:UOp) -> UOp:
-  tsink = graph_rewrite(tsink, pm_insert_stages, ctx=count_uses(tsink), bottom_up=True, name="insert stages")
-  limit = MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(DEV.device, 0)
-  tsink = graph_rewrite(tsink, pm_limit_buffers if limit else pm_kernelize, ctx=({}, tsink.device, limit), walk=True, name="kernelize")
+  tsink = graph_rewrite(tsink, pm_insert_stages, ctx=StageCtx(count_buffers(tsink), tsink.device), bottom_up=True, name="insert stages")
+  tsink = graph_rewrite(tsink, pm_stage_to_anon_store, walk=True, name="stage to anon store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
   tsink = graph_rewrite(tsink, pm_finalize_graph+pm_mops+symbolic+pm_reduce_simplify, name="finalize graph")
