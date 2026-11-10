@@ -50,7 +50,7 @@ def _render_arg(x:UOp) -> str:
     case Ops.SINK: return x.arg.name if isinstance(x.arg, KernelInfo) else ""
     case Ops.REDUCE: return f"op={x.arg[0].name.lower()}" + (f" pop={x.arg[1]}" if x.arg[1] else "")
     case Ops.CAST | Ops.BITCAST: return x.arg.name   # one scalar -> bare
-    case Ops.COPY | Ops.SPECIAL: return x.arg   # the whole arg is a device/string
+    case Ops.COPY | Ops.SPECIAL: return x.arg if isinstance(x.arg, str) else repr(x.arg)   # the whole arg is a device/string
     case _: return repr(x.arg) if x.arg is not None else ""
 
 # CONSTs never get lines (inline literals, no %id); concrete all-const STACKs merge into their parent as tuples
