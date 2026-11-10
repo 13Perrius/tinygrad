@@ -852,7 +852,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @recursive_property
   def device(self) -> str|tuple[str, ...]|None:
     if self.op is Ops.PARAM: return self.arg.device
-    if self.op is Ops.STAGE: return self.src[0].device 
+    if self.op is Ops.STAGE: return self.arg.device if self.arg is not None else self.src[0].device
     if self.op is Ops.AFTER: return self.src[0].device
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
