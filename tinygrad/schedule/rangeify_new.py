@@ -56,10 +56,12 @@ pm_convert_ranges = PatternMatcher([
 Stageable = Enum('Stageable', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
 
 def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
-  uses: dict[UOp, UOp|Stageable] = {tsink:tsink}
+  uses: dict[UOp, UOp|Stageable] = {}
   stageable: dict[UOp, Stageable] = {}
   for x in reversed(tsink.toposort()):
-    if (is_stageable:=isinstance(use:=uses[x], Stageable)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: stageable.setdefault(x, use)
+    if x is tsink: continue
+    if (is_stageable:=isinstance(use:=uses.get(x,x), Stageable)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}: 
+      stageable.setdefault(x, use)
     # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => stageable. 
     if x in stageable or x.has_buffer_identity(after_ok=True) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_stageable): use = x
     for s in x.src:
@@ -99,7 +101,7 @@ def insert_stage(ctx, s):
   return s.stage(arg=StageOpts(device=ctx.device if s.device is None else s.device) if v is Stageable.FORCE else None)
 
 pm_insert_stages = PatternMatcher([
-  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), lambda ctx, x: x.replace(src=tuple(insert_stage(ctx, s) for s in x.src))) 
+  (UPat(GroupOp.All-{Ops.STAGE,Ops.SINK}, name="x"), lambda ctx, x: x.replace(src=tuple(insert_stage(ctx, s) for s in x.src))) 
 ])
 
 def stage_to_store(stg:UOp):
@@ -120,6 +122,10 @@ pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_
 def compose_ranges(ind:UOp, stg:UOp) -> UOp:
   return graph_rewrite(stg.src[0], pm_substitute_ranges, ctx=dict(zip(stg.src[1:], ind.src[1:])), bottom_up=True)
 
+pm_compose_ranges = PatternMatcher([
+  (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None),
+])
+
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not x.has_buffer_identity(after_ok=True)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
   if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
@@ -131,13 +137,13 @@ def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
 
 pm_finalize_graph = PatternMatcher([
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
-  (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
+  (UPat(GroupOp.Movement|{Ops.UNSHARD}, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
   (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP)),
   (UPat(Ops.NOOP, name="n").end(allow_any_len=True), lambda n: n),
   (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=tuple(s for s in r.src if s.op is not Ops.CONST))),
   # This is where a stage inserted via Stageable.RANGES is removed.
-  (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None)
+  # (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None)
 ])
 
 def add_arg(ctx, x:UOp) -> UOp|None:
@@ -163,7 +169,7 @@ def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_stage_to_store, walk=True, name="stage to store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-  tsink = graph_rewrite(tsink, pm_finalize_graph+pm_mops+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_compose_ranges+pm_finalize_graph+pm_mops+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
