@@ -1,7 +1,7 @@
 from dataclasses import replace
 from tinygrad.dtype import AddrSpace, dtypes, to_dtype
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, GroupOp
-from tinygrad.uop.ops import graph_rewrite, MapCtx, rewrite_group, identity_element, resolve_returned_after
+from tinygrad.uop.ops import graph_rewrite, MapCtx, rewrite_group, identity_element, resolve_returned_after, resolve
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort
 from tinygrad.schedule.indexing import apply_movement_op
@@ -249,6 +249,10 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
    lambda reduce,x: reduce.const_like(identity_element(reduce.arg[0], reduce.dtype)) if 0 in x.shape and 0 not in reduce.shape else None),
   # handle size 0
   (UPat(GroupOp.All-{Ops.SINK}, name="x"), lambda x: x.const_like(0) if x._shape is not None and 0 in x.shape else None),
+
+  # remove zero-offset slices of CALL srcs
+  (UPat(Ops.CALL, name="c"), lambda c: c.replace(src=(c.body, \
+   *(s.src[0] if s.op is Ops.SHRINK and all(resolve(o == 0, default=False) for o,sz in s.marg) else s for s in c.src_without_body)))),
 
   # remove movement ops from SINK/AFTER. TODO: should be generic
   (UPat(Ops.SINK, name="s"), lambda s: s.replace(src=tuple(walk_mop(u) for u in s.src if u.op is not Ops.NOOP))),
