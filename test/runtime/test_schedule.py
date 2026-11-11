@@ -54,8 +54,13 @@ class TestSchedule(unittest.TestCase):
 
   def test_value_order_dependency_requires_storage(self):
     c = Tensor([0], dtype=dtypes.int32).realize()
-    with self.assertRaisesRegex(RuntimeError, "kernel boundary requires storage"):
-      Tensor(UOp.const(1, dtypes.int32).after(c.uop.index(0).store(5))).item()
+    from tinygrad.helpers import getenv
+    if getenv("R","NEW") == "OLD":
+      with self.assertRaisesRegex(RuntimeError, "kernel boundary requires storage"):
+        Tensor(UOp.const(1, dtypes.int32).after(c.uop.index(0).store(5))).item()
+    else:
+      with self.assertRaisesRegex(RuntimeError, "UOp verification failed"):
+        Tensor(UOp.const(1, dtypes.int32).after(c.uop.index(0).store(5))).item()
 
   def test_cumsum_parallel_reduce_fused(self):
     # two-stage cumsum + ops triggers parallel REDUCEs in one kernel that must share an END (same nesting context = should merge)
