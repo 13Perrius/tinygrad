@@ -141,7 +141,7 @@ pm_finalize_graph = PatternMatcher([
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
   (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP)),
   (UPat(Ops.NOOP, name="n").end(allow_any_len=True), lambda n: n),
-  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=tuple(s for s in r.src if s.op is not Ops.CONST))),
+  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *(s for s in r.src[1:] if s.op is not Ops.CONST))))
   # This is where a stage inserted via Stageable.RANGES is removed.
   # (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None)
 ])
