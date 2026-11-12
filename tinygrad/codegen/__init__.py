@@ -23,9 +23,9 @@ from tinygrad.codegen.decomp.transcendental import get_transcendental_patterns
 from tinygrad.codegen.opt.postrange import apply_opts
 from tinygrad.codegen.late.gater import pm_move_gates_from_index
 from tinygrad.codegen.simplify import pm_simplify_ranges, pm_flatten_range, pm_split_ranges, pm_load_collapse, pm_reduce_unparented
-from tinygrad.codegen.multi import multi_pm
-from tinygrad.codegen.prepare import pm_mops, expand_bitcast, _mop_index, prepare_rangeify
-from tinygrad.codegen.indexing import _stack_select
+from tinygrad.schedule.multi import multi_pm
+from tinygrad.schedule.prepare import pm_mop_index, pm_gated_index, expand_bitcast, prepare_rangeify
+from tinygrad.schedule.indexing import _stack_select
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
 from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing, pm_simplify_add_image
@@ -140,7 +140,7 @@ def do_stack_wmma(u:UOp):
       src.append(b)
   return u.replace(src=tuple(src))
 
-devectorizer2 = pm_mops+PatternMatcher([
+devectorizer2 = pm_mop_index+pm_gated_index+PatternMatcher([
   # unpack broadcasting
   (UPat(GroupOp.Elementwise|{Ops.LOAD,Ops.STORE}, name="b"), do_devectorize),
   # INDEX without src is nothing (TODO: this should be in mop_cleanup)
@@ -232,7 +232,7 @@ def add_local_buffer(ctx, x:UOp):
 
 pm_add_local_buffers = PatternMatcher([
   (UPat(Ops.STAGE, name="x"), add_local_buffer),
-])+pm_mops
+])+pm_mop_index+pm_gated_index
 
 # float ALUs need a float operand
 # make that cast explicit before the decomps, which expand SIN/LOG2/EXP2 into float polynomials and assert a float operand
@@ -275,7 +275,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   sink = graph_rewrite(ast, multi_pm, name="multi_pm")
 
   # preprocess
-  sink = graph_rewrite(sink, pm_mops+pm_expand_value_bitcast, name="early movement ops", bottom_up=True)
+  sink = graph_rewrite(sink, pm_mop_index+pm_gated_index+pm_expand_value_bitcast, name="early movement ops", bottom_up=True)
 
   # first we optimize
   if optimize:
