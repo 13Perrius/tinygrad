@@ -1,6 +1,7 @@
-from tinygrad.uop.ops import PatternMatcher, UPat, Ops
+from tinygrad.uop.ops import PatternMatcher, UPat, UOp, Ops, GroupOp
+from tinygrad.dtype import AddrSpace
 
-# TODO: pm_mops from rangeify belongs here. this is all pattern matchers that strictly clean up movement ops
+# TODO: pm_mop_index from rangeify belongs here. this is all pattern matchers that strictly clean up movement ops
 
 mop_cleanup = PatternMatcher([
   # merge adjacent SHRINKs
@@ -28,4 +29,7 @@ mop_cleanup = PatternMatcher([
   # INDEX on shaped INDEX (TODO: this can be more generic)
   (UPat(Ops.INDEX, src=(UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var("idx1_arg"))),), allow_any_len=True, name="idx2"),
    lambda buf,idx1_arg,idx2: buf.index(idx1_arg.index(*idx2.src[1:])) if len(idx1_arg.shape) == len(idx2.src[1:]) else None),
+  # storage moves movement ops and INDEX after AFTER
+  (UPat(GroupOp.Movement|{Ops.INDEX}, name="r").after(name="a", allow_any_len=True),
+   lambda r,a: UOp(r.op, src=(a.replace(src=(r.src[0],)+a.src[1:]),)+r.src[1:], arg=r.arg) if r.addrspace is not AddrSpace.ALU else None),
 ])
