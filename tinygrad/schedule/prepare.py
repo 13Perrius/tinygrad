@@ -158,6 +158,7 @@ def copy_to_anon_store(x:UOp, copy:UOp):
   return buf.after(buf.store(x)).shrink_to(copy.shape)
 
 def stage_to_anon_store(x:UOp, stg:UOp):
+  if getenv("R","NEW") == "NEW": return None
   if stg.arg is not None and stg.arg.addrspace is not AddrSpace.GLOBAL: return None
   # the buffer created here is inside the call and is not persisted, like the buffers created for copies
   buf = UOp.alloc(stg.max_shape, stg.dtype, device=x.device)
