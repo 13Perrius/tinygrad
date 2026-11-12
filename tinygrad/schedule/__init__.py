@@ -173,9 +173,10 @@ def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
   if dst.is_virtual or src.is_virtual or (dst.device == src.device and not dst.on_disk()): return None
   from tinygrad.codegen.simplify import pm_flatten_range, pm_simplify_ranges
-  from tinygrad.schedule.prepare import pm_gated_index
+  from tinygrad.schedule.prepare import pm_gated_index, pm_mop_index
   from tinygrad.uop.symbolic import sym
-  sink = graph_rewrite(ast, sym+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
+  #TODO: remove pm_mop_index after I drop R=OLD
+  sink = graph_rewrite(ast, sym+pm_mop_index+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
   # the simplified body is kept only if it is a copy, any other kernel goes to codegen unchanged
   return pm_copy_kernel.rewrite(call.replace(src=(sink,) + call.src[1:]))
 
