@@ -35,8 +35,9 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[U
     case Ops.SHRINK: return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
 
+#TODO: this goes in ops.py?
 @dataclass(frozen=True)
 class StageOpts:
-  device: str|tuple[str, ...]|None = None
+  device: str|tuple[str, ...]
   addrspace: AddrSpace = AddrSpace.GLOBAL
 
