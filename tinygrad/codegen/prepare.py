@@ -167,6 +167,7 @@ def copy_to_anon_store(x:UOp, copy:UOp):
   return buf.after(buf.store(x)).shrink_to(copy.shape)
 
 def stage_to_anon_store(x:UOp, stg:UOp):
+  if getenv("R","NEW") == "NEW": return None
   if stg.arg is not None and stg.arg.addrspace is not AddrSpace.GLOBAL: return None
   if (device:=stg.arg.device if stg.arg is not None and stg.arg.device is not None else x.device) is None:
     raise RuntimeError("global storage needs a device, stage a value with a device or give the STAGE one")

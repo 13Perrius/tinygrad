@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 import functools
-from tinygrad.uop.ops import Ops, UOp, graph_rewrite, sint, AxisType, AddrSpace
+from tinygrad.uop.ops import Ops, UOp, graph_rewrite, sint, AxisType
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.helpers import argsort
 
@@ -34,10 +33,4 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint, ...], arg:tuple, rngs:tuple[U
       return apply_reshape(in_shape, arg, sink.substitute(subs)).substitute({v:k for k,v in subs.items()}).src
     case Ops.SHRINK: return tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case _: raise RuntimeError(f"{op} is not a MovementOp")
-
-#TODO: this goes in ops.py?
-@dataclass(frozen=True)
-class StageOpts:
-  device: str|tuple[str, ...]
-  addrspace: AddrSpace = AddrSpace.GLOBAL
 
