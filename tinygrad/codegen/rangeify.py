@@ -105,7 +105,7 @@ def after_all_invalid(after:UOp):
     and all(r in st.src[0].ranges for r in s.ended_ranges)
     and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
 
-pm_const_buffer_folding = pm_mops+PatternMatcher([
+pm_const_buffer_folding = pm_mop_index+pm_gated_index+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
   (UPat(Ops.INDEX, name="idx").f(Ops.STAGE, allow_any_len=True, name="b2"), remove_noop_bufferize),
@@ -237,7 +237,7 @@ def remove_noop_afters(x:UOp) -> UOp|None:
   if len(src) != len(x.src): return src[0] if len(src) == 1 else x.replace(src=src)
   return None
 
-pm_add_buffers = pm_mops+pm_flatten_bufferize+PatternMatcher([
+pm_add_buffers = pm_mop_index+pm_gated_index+pm_flatten_bufferize+PatternMatcher([
   (UPat(Ops.STAGE, src=(UPat(), UPat(name="idx")), name="x"), bufferize_to_store),
 
   # INDEX of a buffer through the weak cast added above: index the buffer directly and cast the loaded value instead.

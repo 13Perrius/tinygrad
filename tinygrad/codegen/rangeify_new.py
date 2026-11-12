@@ -5,7 +5,7 @@ from tinygrad.uop.ops import AxisType, PatternMatcher, UOp, UPat, GroupOp, Ops, 
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, argsort, VIZ, MAX_KERNEL_BUFFERS, SPEC, DEV
-from tinygrad.schedule.prepare import pm_mops
+from tinygrad.schedule.prepare import pm_gated_index
 from tinygrad.schedule.indexing_new import apply_reshape, apply_movement_op, StageOpts
 
 def new_ranges(shape:tuple[sint, ...], rid=itertools.count(0)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, next(rid)) for sz in shape)
@@ -169,7 +169,7 @@ def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_stage_to_store, walk=True, name="stage to store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-  tsink = graph_rewrite(tsink, pm_compose_ranges+pm_finalize_graph+pm_mops+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_compose_ranges+pm_finalize_graph+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
