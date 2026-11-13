@@ -32,6 +32,28 @@ from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing,
 from tinygrad.codegen.rangeify import BufferizeOpts, get_kernel_graph
 from tinygrad.codegen.memory import memory_plan_rewrite
 
+def _valid(i:UOp) -> UOp:
+  # an index is invalid where its valid is false, the gates inside the index math are lifted out first
+  if any(x.is_invalid for x in i.get_idx().backward_slice): i = graph_rewrite(i, symbolic, name="lift gates")
+  return i.get_valid()
+
+# movement op on INDEX as a PatternMatcher
+def _mop_index(r:UOp, idx:UOp):
+  idxs, in_shape, arg = idx.src[1:], r.src[0].shape, r.marg
+  if partial := len(idxs) != len(r.shape):
+    src_prefix = len(in_shape) - len(r.shape[len(idxs):])
+    if r.op is not Ops.RESHAPE or src_prefix < 0 or in_shape[src_prefix:] != r.shape[len(idxs):]: return None
+    in_shape, arg = in_shape[:src_prefix], r.shape[:len(idxs)]
+  new_idxs = apply_movement_op(r.op, in_shape, arg, idxs)
+  kept = {UOp.const(True)} | {c for i in new_idxs for c in _valid(i).split_uop(Ops.AND)}
+  dropped = dedup(c for i in idxs for c in _valid(i).split_uop(Ops.AND) if c not in kept)
+  if (ret := r.src[0].index(*new_idxs, arg=idx.arg)).shape != idx.shape and partial: return None
+  # the gates the movement op dropped from the indexes still gate the value
+  if dropped: ret = dropped[0].uprod(*dropped[1:]).where(ret, ret.dtype.const(0))
+  return ret.after(*[i for i in idxs if i.op_in_backward_slice_with_self(*GroupOp.Effect)])
+
+pm_mop_index = PatternMatcher([(UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index)])
+
 def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
 
@@ -151,7 +173,7 @@ devectorizer2 = pm_mop_index+pm_gated_index+PatternMatcher([
   (UPat(Ops.RESHAPE, name="x"), lambda x: x.src[0].index(0) if x.marg == () and x.src[0].shape == (1,) else None),
   # a scalar index into a STACK selects its lanes after the STACK and the index, renderers only extract lanes at const indices
   (UPat(Ops.INDEX, src=(UPat(Ops.STACK, name="a"), UPat.var("i"))),
-   lambda a,i: _stack_select(i, list(a.src)).after(a, i) if i.shape == () and a.ndim == 1 else None),
+   lambda a,i: stack_select(i, list(a.src)).after(a, i) if i.shape == () and a.ndim == 1 else None),
 ])
 
 def fix_group_for_reduce(x:UOp):
@@ -161,13 +183,8 @@ def fix_group_for_reduce(x:UOp):
 
   # do only the non grouped reduces early
   ret = x.replace(src=(x.src[0],)+tuple(reduce_r))
-<<<<<<< HEAD
   reduce_weak = [x.replace(arg=(AxisType.WEAK, x.axis_id[0]+100, *x.axis_id[1:])) for x in reduce_gfr]
-  buf = ret.bufferize(*reduce_gfr, arg=BufferizeOpts(None, AddrSpace.LOCAL)).index(*reduce_weak)
-=======
-  reduce_loop = [x.replace(arg=(AxisType.WEAK, x.axis_id[0]+100, *x.axis_id[1:])) for x in reduce_gfr]
-  buf = ret.bufferize(*reduce_gfr, arg=StageOpts(addrspace=AddrSpace.LOCAL)).index(*reduce_loop)
->>>>>>> d18d21cde (StageOpts)
+  buf = ret.stage(*reduce_gfr, arg=StageOpts(addrspace=AddrSpace.LOCAL)).index(*reduce_weak)
 
   # do the final reduce (if/barrier are added in gpudims step)
   # NOTE: we remove all horizontal reduces here, they remain in the first reduce
