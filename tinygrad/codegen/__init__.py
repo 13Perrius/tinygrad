@@ -22,14 +22,28 @@ from tinygrad.codegen.opt.postrange import apply_opts
 from tinygrad.codegen.late.gater import pm_move_gates_from_index
 from tinygrad.codegen.simplify import pm_simplify_ranges, pm_flatten_range, pm_split_ranges, pm_load_collapse, pm_reduce_unparented
 from tinygrad.schedule.multi import multi_pm
-from tinygrad.schedule.prepare import pm_mop_index, pm_gated_index, expand_bitcast
-from tinygrad.schedule.indexing import _stack_select, apply_movement_op
+from tinygrad.schedule.prepare import pm_gated_index, expand_bitcast
+from tinygrad.schedule.indexing import apply_movement_op
+from tinygrad.schedule.rangeify import stack_select
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
 from tinygrad.codegen.late.coalesce import memory_coalescing, pm_simplify_add_image
 from tinygrad.helpers import all_same, argsort, partition, to_function_name
 from tinygrad.device import TinyELF
 from tinygrad.uop.ops import _broadcast_shape, identity_element, StageOpts
+
+# movement op on INDEX as a PatternMatcher
+def _mop_index(r:UOp, idx:UOp):
+  idxs = idx.src[1:]
+  if len(idxs) == len(r.shape):
+    return r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), arg=idx.arg)
+  if r.op is Ops.RESHAPE:
+    src_prefix = len(r.src[0].shape) - len(r.shape[len(idxs):])
+    if src_prefix >= 0 and r.src[0].shape[src_prefix:] == r.shape[len(idxs):]:
+      ret = r.src[0].index(*apply_movement_op(r.op, r.src[0].shape[:src_prefix], r.shape[:len(idxs)], idxs), arg=idx.arg)
+      return ret if ret.shape == idx.shape else None
+
+pm_mop_index = PatternMatcher([(UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index)])
 
 def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
@@ -150,7 +164,7 @@ devectorizer2 = pm_mop_index+pm_gated_index+PatternMatcher([
   (UPat(Ops.RESHAPE, name="x"), lambda x: x.src[0].index(0) if x.marg == () and x.src[0].shape == (1,) else None),
   # a scalar index into a STACK selects its lanes after the STACK and the index, renderers only extract lanes at const indices
   (UPat(Ops.INDEX, src=(UPat(Ops.STACK, name="a"), UPat.var("i"))),
-   lambda a,i: _stack_select(i, list(a.src)).after(a, i) if i.shape == () and a.ndim == 1 else None),
+   lambda a,i: stack_select(i, list(a.src)).after(a, i) if i.shape == () and a.ndim == 1 else None),
 ])
 
 def fix_group_for_reduce(x:UOp):
@@ -161,7 +175,7 @@ def fix_group_for_reduce(x:UOp):
   # do only the non grouped reduces early
   ret = x.replace(src=(x.src[0],)+tuple(reduce_r))
   reduce_loop = [x.replace(arg=(AxisType.WEAK, x.axis_id[0]+100, *x.axis_id[1:])) for x in reduce_gfr]
-  buf = ret.bufferize(*reduce_gfr, arg=StageOpts(addrspace=AddrSpace.LOCAL)).index(*reduce_loop)
+  buf = ret.stage(*reduce_gfr, arg=StageOpts(addrspace=AddrSpace.LOCAL)).index(*reduce_loop)
 
   # do the final reduce (if/barrier are added in gpudims step)
   # NOTE: we remove all horizontal reduces here, they remain in the first reduce

@@ -5,7 +5,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import GroupOp, UOp, Ops, UOpMetaClass, graph_rewrite, MapCtx, gate_kernel_sink, KernelInfo
 from tinygrad.uop.spec import type_verify, spec_tensor
 from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, SCACHE, BASEDIR, partition, dedup, all_int, VIZ
-from tinygrad.helpers import diskcache_get, diskcache_put, colored, getenv
+from tinygrad.helpers import diskcache_get, diskcache_put, colored
 
 # **** schedule linearizer
 
@@ -89,13 +89,9 @@ from tinygrad.schedule.memory import memory_plan_rewrite
 from tinygrad.engine.realize import capturing, pm_flatten_linear
 from tinygrad.schedule.prepare import prepare_rangeify
 from tinygrad.schedule.multi import multi_pm
-from tinygrad.schedule.rangeify import get_kernel_graph as get_kernel_graph_old
-from tinygrad.schedule.rangeify_new import get_kernel_graph as get_kernel_graph_new
+from tinygrad.schedule.rangeify import get_kernel_graph
 from tinygrad.helpers import CAPTURING
 from tinygrad.uop.ops import PatternMatcher, UPat
-
-GKG_FXNS = {"OLD":get_kernel_graph_old, "NEW":get_kernel_graph_new}
-get_kernel_graph = GKG_FXNS[getenv("R","NEW")]
 
 def create_new_buffer(ctx:tuple[UOp, ...], b:UOp):
   device = b.device if b.device is not None else next(a.device for a in ctx if a.device is not None)
@@ -173,10 +169,9 @@ def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
   if dst.is_virtual or src.is_virtual or (dst.device == src.device and not dst.on_disk()): return None
   from tinygrad.codegen.simplify import pm_flatten_range, pm_simplify_ranges
-  from tinygrad.schedule.prepare import pm_gated_index, pm_mop_index
+  from tinygrad.schedule.prepare import pm_gated_index
   from tinygrad.uop.symbolic import sym
-  #TODO: remove pm_mop_index after I drop R=OLD
-  sink = graph_rewrite(ast, sym+pm_mop_index+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
+  sink = graph_rewrite(ast, sym+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
   # the simplified body is kept only if it is a copy, any other kernel goes to codegen unchanged
   return pm_copy_kernel.rewrite(call.replace(src=(sink,) + call.src[1:]))
 

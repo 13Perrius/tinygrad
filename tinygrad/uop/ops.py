@@ -50,7 +50,7 @@ class ParamArg:
 
 @dataclass(frozen=True)
 class StageOpts:
-  device: str|tuple[str, ...]|None = None 
+  device: str|tuple[str, ...]|None = None
   addrspace: AddrSpace = AddrSpace.GLOBAL
 
 axis_letters = {AxisType.DEVICE: "d", AxisType.GLOBAL: "g", AxisType.LOCAL: "l", AxisType.WARP: "w", AxisType.WEAK: "L",
@@ -376,8 +376,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       case Ops.PYLITERAL: return None
       case Ops.STAGE:
         # STAGE adds the existing shape to the front, opposite of INDEX
-        if getenv("R","NEW") == "OLD":
-          return tuple([int(r.vmax+1) for r in self.src[1:]])+self.src[0].shape
         return tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in self.src[1:])+self.src[0].shape
 
       # wmma output shape = accumulator shape (src[2])
@@ -652,7 +650,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if isinstance(arg, Ops): arg = (arg, 0)
     return UOp(Ops.REDUCE, src=(self,)+src, arg=arg, **kwargs)
 
-  def bufferize(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def stage(self, *args, **kwargs): return UOp(Ops.STAGE, src=(self,)+args, **kwargs)
   def allreduce(self, op, device:str|tuple[str, ...]):
     assert isinstance(self.device, tuple), f"allreduce must be on tuple {self.device} isn't"
@@ -903,7 +900,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return s
 
   def contiguous_view(self) -> tuple[UOp, int]|None:
-    from tinygrad.schedule.prepare import pm_mop_index, pm_gated_index
+    from tinygrad.codegen import pm_mop_index
+    from tinygrad.schedule.prepare import pm_gated_index
     from tinygrad.uop.symbolic import symbolic
 
     # WEBGPU and CL do not support views.
@@ -930,7 +928,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.op is Ops.MSTACK: return all(s.has_buffer_identity(after_ok) for s in self.src)
     if self.op in {Ops.RESHAPE, Ops.UNSHARD, Ops.MSELECT}: return self.src[0].has_buffer_identity(after_ok)
     if after_ok and self.op == Ops.AFTER: return self.src[0].has_buffer_identity(after_ok)
-    return self.op in GroupOp.Defines and not self.addrspace is AddrSpace.ALU
+    return self.op in GroupOp.Defines and self.addrspace is not AddrSpace.ALU
 
   @functools.cached_property
   def _buffer_view(self) -> tuple[UOp, int]:
@@ -1211,7 +1209,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def view_as(self:UOp, shape:tuple[sint, ...], axis:int|None=None) -> UOp:
     """view flat storage as the given (possibly symbolic) shape, optionally sharded on axis, the UNSHARD gives back the multiplied shape"""
     max_shape = to_max_shape(shape)
-    ret = self.reshape(max_shape) 
+    ret = self.reshape(max_shape)
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 

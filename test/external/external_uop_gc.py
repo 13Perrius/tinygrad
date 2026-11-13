@@ -2,7 +2,7 @@ import gc
 from tinygrad import Tensor, UOp, Device, nn
 from tinygrad.schedule import schedule_cache
 from tinygrad.codegen import to_program, to_program_cache
-from tinygrad.schedule.indexing import apply_movement_op, _apply_reshape
+from tinygrad.schedule.indexing import apply_movement_op, apply_reshape
 from tinygrad.uop.divandmod import fold_divmod_general
 from test.test_tiny import TestTiny
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     schedule_cache.clear()
     to_program_cache.clear()
     apply_movement_op.cache_clear()
-    _apply_reshape.cache_clear()
+    apply_reshape.cache_clear()
     fold_divmod_general.cache_clear()
     Tensor._device_seeds.clear()
     Tensor._device_rng_counters.clear()

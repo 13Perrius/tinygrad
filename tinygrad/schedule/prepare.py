@@ -61,19 +61,6 @@ pm_fold_moved_after = PatternMatcher([
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
-# movement op on INDEX as a PatternMatcher
-def _mop_index(r:UOp, idx:UOp):
-  idxs = idx.src[1:]
-  if len(idxs) == len(r.shape):
-    return r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), arg=idx.arg)
-  if r.op is Ops.RESHAPE:
-    src_prefix = len(r.src[0].shape) - len(r.shape[len(idxs):])
-    if src_prefix >= 0 and r.src[0].shape[src_prefix:] == r.shape[len(idxs):]:
-      ret = r.src[0].index(*apply_movement_op(r.op, r.src[0].shape[:src_prefix], r.shape[:len(idxs)], idxs), arg=idx.arg)
-      return ret if ret.shape == idx.shape else None
-
-pm_mop_index = PatternMatcher([(UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index)])
-
 pm_gated_index = PatternMatcher([
   # A store through a padded view gates the destination index, not its loaded value.
   (UPat.var("a").where(UPat.var("b").where(UPat.var("dst"), 0), UPat.var("pad")).store(UPat.var("val")),
@@ -157,15 +144,6 @@ def copy_to_anon_store(x:UOp, copy:UOp):
   buf = buf.replace(src=buf.src[:1]+copy.src[1:]).reshape(x.max_shape)
   return buf.after(buf.store(x)).shrink_to(copy.shape)
 
-def stage_to_anon_store(x:UOp, stg:UOp):
-  if getenv("R","NEW") == "NEW": return None
-  if stg.arg is not None and stg.arg.addrspace is not AddrSpace.GLOBAL: return None
-  # the buffer created here is inside the call and is not persisted, like the buffers created for copies
-  buf = UOp.alloc(stg.max_shape, stg.dtype, device=x.device)
-  view = buf.shrink_to(stg.shape)
-  dst = view.index(*stg.src[1:]) if len(stg.src) > 1 else view
-  return view.after(dst.store(x).end(*stg.src[1:]))
-
 def materialize_cross_device_src(dest:UOp, src:UOp):
   # cross-device copies must read a whole buffer (SDMA can't do offset copies)
   if src.device is None or dest.device == src.device or src.has_buffer_identity(after_ok=True): return None
@@ -213,9 +191,6 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   # a STAGE of an already materialized value (or of a COPY, which materializes itself) is a no-op
   (UPat(Ops.STAGE, src=(UPat.var("x"),)),
    lambda x: x if x.has_buffer_identity(after_ok=True) or x.op is Ops.COPY else None),
-
-  # a GLOBAL STAGE stores each value slice at its leading range coordinates in a fresh call-local buffer
-  (UPat(Ops.STAGE, src=(UPat.var("x"),), allow_any_len=True, name="stg"), stage_to_anon_store),
 
   # reshaping on STORE can be a NOOP
   (UPat(Ops.STORE, src=(UPat(Ops.RESHAPE, src=(UPat.var("dst",),), allow_any_len=True),
