@@ -29,8 +29,7 @@ from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regallo
 from tinygrad.codegen.late.coalesce import memory_coalescing, pm_simplify_add_image
 from tinygrad.helpers import all_same, argsort, partition, to_function_name
 from tinygrad.device import TinyELF
-from tinygrad.uop.ops import _broadcast_shape, identity_element
-from tinygrad.schedule.rangeify import BufferizeOpts
+from tinygrad.uop.ops import _broadcast_shape, identity_element, StageOpts
 
 def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
@@ -162,7 +161,7 @@ def fix_group_for_reduce(x:UOp):
   # do only the non grouped reduces early
   ret = x.replace(src=(x.src[0],)+tuple(reduce_r))
   reduce_loop = [x.replace(arg=(AxisType.WEAK, x.axis_id[0]+100, *x.axis_id[1:])) for x in reduce_gfr]
-  buf = ret.bufferize(*reduce_gfr, arg=BufferizeOpts(None, AddrSpace.LOCAL)).index(*reduce_loop)
+  buf = ret.bufferize(*reduce_gfr, arg=StageOpts(addrspace=AddrSpace.LOCAL)).index(*reduce_loop)
 
   # do the final reduce (if/barrier are added in gpudims step)
   # NOTE: we remove all horizontal reduces here, they remain in the first reduce

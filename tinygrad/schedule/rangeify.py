@@ -20,7 +20,7 @@ sys.setrecursionlimit(10000)
 
 # you don't know in the first pass if axes are going to die, this happens if there's an EXPAND to the left
 def cleanup_dead_axes(b:UOp):
-  if not b.arg.removable: return None
+  if not getattr(b.arg, "removable", False): return None
   # don't optimize AFTER (AFTER is a buffer identity — ranges define consumer access, not computation)
   if b.src[0].op is Ops.AFTER: return None
 
@@ -51,7 +51,7 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
   assert all(x.op in {Ops.RANGE, Ops.CONST} for x in buf.src[1:])
 
   # if it's user contiguous, we never remove it
-  if not buf.arg.removable: return None
+  if not getattr(buf.arg, "removable", False): return None
 
   # *** here is where we compute the cost ***
   # if we return None, the bufferize is kept

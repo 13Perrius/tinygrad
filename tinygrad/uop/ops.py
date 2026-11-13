@@ -50,7 +50,7 @@ class ParamArg:
 
 @dataclass(frozen=True)
 class StageOpts:
-  device: str|tuple[str, ...]
+  device: str|tuple[str, ...]|None = None 
   addrspace: AddrSpace = AddrSpace.GLOBAL
 
 axis_letters = {AxisType.DEVICE: "d", AxisType.GLOBAL: "g", AxisType.LOCAL: "l", AxisType.WARP: "w", AxisType.WEAK: "L",
