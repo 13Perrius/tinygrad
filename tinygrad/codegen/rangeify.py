@@ -9,7 +9,7 @@ from tinygrad.schedule.prepare import pm_gated_index
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.schedule.indexing import apply_reshape, apply_movement_op
 
-def new_ranges(shape:tuple[sint, ...], rid=itertools.count(0)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, next(rid)) for sz in shape)
+def new_ranges(shape:tuple[sint, ...], rid=itertools.count(1)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, -next(rid)) for sz in shape)
 
 def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if x.op not in GroupOp.Broadcastable: return rngs
@@ -111,7 +111,7 @@ pm_insert_stages = PatternMatcher([
 def stage_to_anon_store(stg:UOp):
   # The buffer created here is inside the call and is not persisted, like the buffers created for copies.
   if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
-  alloc = UOp.alloc(stg.shape, stg.dtype, device=stg.device)
+  alloc = UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)
   return alloc.base.after(alloc.index(*r).store(stg.src[0]).end(*r) if (r:=stg.src[1:]) else alloc.store(stg.src[0])).view_as(stg.shape)
 
 pm_stage_to_anon_store = PatternMatcher([
@@ -162,9 +162,10 @@ pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RA
 
 def split_kernels(s:UOp) -> UOp:
   args: list[UOp] = []
-  # Codegen prefers that ranges are ordered and renumbered according to creation order.
+  # Codegen prefers that ranges are ordered and renumbered according to creation order.  Initial ID < 0 => a RANGE inserted by rangeify.
   rargs = [x.arg for x in s.toposort(gate=lambda x: not kernel_boundary(x)) if x.op is Ops.RANGE]
-  s = graph_rewrite(s, pm_kernel, ctx=(args, {arg:i for i,arg in enumerate(sorted(rargs))}), bottom_up=True, walk=True, name="kernel")
+  rargs = sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1])))
+  s = graph_rewrite(s, pm_kernel, ctx=(args, {arg:i for i,arg in enumerate(rargs)}), bottom_up=True, walk=True, name="kernel")
   return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*args)
 
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
