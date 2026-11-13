@@ -4,8 +4,7 @@ from tinygrad.engine.realize import run_linear
 from tinygrad.codegen import to_program
 import numpy as np
 from tinygrad.dtype import AddrSpace, dtypes
-from tinygrad.codegen.rangeify import BufferizeOpts
-from tinygrad.uop.ops import KernelInfo, AxisType, Ops
+from tinygrad.uop.ops import KernelInfo, AxisType, Ops, StageOpts
 from tinygrad.codegen.opt import Opt, OptOps
 from tinygrad.renderer.ptx import PTXRenderer
 from tinygrad.renderer import TinyELF
@@ -263,8 +262,13 @@ class TestCustomKernel(unittest.TestCase):
   def test_stage_then_reduce(self):
     # the STAGE ends j, so the accumulator of the reduce over jj is initialized before the jj loop, not inside it
     def kernel(C:UOp, A:UOp) -> UOp:
+<<<<<<< HEAD
       i, j, jj = UOp.range(4, 0), UOp.range(8, 1), UOp.range(8, 2)
       stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
+=======
+      i, j, jj = UOp.range(4, 0), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
+      stage = (A[i, j] * 2).bufferize(j, arg=StageOpts(addrspace=AddrSpace.LOCAL))
+>>>>>>> d18d21cde (StageOpts)
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())
@@ -273,8 +277,13 @@ class TestCustomKernel(unittest.TestCase):
   def test_stage_in_thread_range(self):
     # the STAGE is inside the thread range i, so every thread stages its own row
     def kernel(C:UOp, A:UOp) -> UOp:
+<<<<<<< HEAD
       i, j, jj = UOp.range(4, 0, AxisType.LOCAL), UOp.range(8, 1), UOp.range(8, 2)
       stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.LOCAL))
+=======
+      i, j, jj = UOp.range(4, 0, AxisType.LOCAL), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
+      stage = (A[i, j] * 2).bufferize(j, arg=StageOpts(addrspace=AddrSpace.LOCAL))
+>>>>>>> d18d21cde (StageOpts)
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())
@@ -283,8 +292,13 @@ class TestCustomKernel(unittest.TestCase):
   def test_reg_stage_then_reduce(self):
     # the REG buffer of the STAGE and the accumulator of the reduce are different buffers
     def kernel(C:UOp, A:UOp) -> UOp:
+<<<<<<< HEAD
       i, j, jj = UOp.range(4, 0), UOp.range(8, 1), UOp.range(8, 2)
       stage = (A[i, j] * 2).bufferize(j, arg=BufferizeOpts(None, AddrSpace.REG))
+=======
+      i, j, jj = UOp.range(4, 0), UOp.range(8, 1, AxisType.LOOP), UOp.range(8, 2, AxisType.LOOP)
+      stage = (A[i, j] * 2).bufferize(j, arg=StageOpts(addrspace=AddrSpace.REG))
+>>>>>>> d18d21cde (StageOpts)
       return C[i].store(stage.index(jj).reduce(jj, arg=Ops.ADD)).end(i).sink(arg=KernelInfo(opts_to_apply=()))
     a = Tensor.arange(32).reshape(4, 8).float().contiguous().realize()
     self.assertEqual(Tensor.custom_kernel(Tensor.empty(4), a, fxn=kernel)[0].tolist(), (a*2).sum(1).tolist())
@@ -314,14 +328,24 @@ class TestCustomKernel(unittest.TestCase):
 
   def test_explicit_stage_padded_slice(self):
     def kernel(out):
+<<<<<<< HEAD
       r = UOp.range(2, 0)
       return out.store(r.expand(2).pad((1, 1)).bufferize(r, arg=BufferizeOpts(Device.DEFAULT, removable=False))).sink()
+=======
+      r = UOp.range(2, 0, AxisType.LOOP)
+      return out.store(r.expand(2).pad((1, 1)).stage(r, arg=StageOpts(Device.DEFAULT))).sink()
+>>>>>>> d18d21cde (StageOpts)
     self.assertEqual(Tensor.empty(2, 4, dtype=dtypes.int).custom_kernel(fxn=kernel)[0].tolist(), [[0, 0, 0, 0], [0, 1, 1, 0]])
 
   def _test_explicit_stage_free_range(self, space:AddrSpace):
     def kernel(out):
+<<<<<<< HEAD
       i, j = UOp.range(3, 0), UOp.range(4, 1)
       v = (i*10+j).cast(dtypes.int).bufferize(j, arg=BufferizeOpts(None, space, removable=False))
+=======
+      i, j = UOp.range(3, 0, AxisType.LOOP), UOp.range(4, 1, AxisType.LOOP)
+      v = (i*10+j).cast(dtypes.int).bufferize(j, arg=StageOpts(addrspace=space))
+>>>>>>> d18d21cde (StageOpts)
       return out[i].store(v.index(2)).end(i).sink()
     self.assertEqual(Tensor.empty(3, dtype=dtypes.int).custom_kernel(fxn=kernel)[0].tolist(), [2, 12, 22])
   @unittest.skipIf(isinstance(Device[Device.DEFAULT].renderer, PTXRenderer), "PTX does not support dynamic register indexing")
@@ -331,8 +355,13 @@ class TestCustomKernel(unittest.TestCase):
 
   def _test_explicit_stage_no_range(self, space:AddrSpace):
     def kernel(out):
+<<<<<<< HEAD
       i = UOp.range(3, 0)
       return out[i].store((i*10).cast(dtypes.int).bufferize(arg=BufferizeOpts(None, space, removable=False))+1).end(i).sink()
+=======
+      i = UOp.range(3, 0, AxisType.LOOP)
+      return out[i].store((i*10).cast(dtypes.int).bufferize(arg=StageOpts(addrspace=space))+1).end(i).sink()
+>>>>>>> d18d21cde (StageOpts)
     self.assertEqual(Tensor.empty(3, dtype=dtypes.int).custom_kernel(fxn=kernel)[0].tolist(), [1, 11, 21])
   def test_explicit_stage_no_range_reg(self): self._test_explicit_stage_no_range(AddrSpace.REG)
   @unittest.skipIf(not Device[Device.DEFAULT].renderer.has_shared, "LOCAL STAGE needs shared memory")
@@ -341,8 +370,13 @@ class TestCustomKernel(unittest.TestCase):
   def test_explicit_stage_scalar_index(self):
     for direct, want in ((True, [2]), (False, [30])):
       def kernel(out, direct=direct):
+<<<<<<< HEAD
         r = UOp.range(4, 0, dtype=dtypes.int32)
         v = r.bufferize(r, arg=BufferizeOpts(Device.DEFAULT, removable=False)).index(2).load()
+=======
+        r = UOp.range(4, 0, AxisType.LOOP, dtype=dtypes.int32)
+        v = r.stage(r, arg=StageOpts(Device.DEFAULT)).index(2).load()
+>>>>>>> d18d21cde (StageOpts)
         values = UOp.stack(*[UOp.const(x, dtypes.int32) for x in (10, 20, 30, 40)])
         return out.index(0).store(v if direct else values.index(v)).sink()
       with self.subTest(direct=direct):
