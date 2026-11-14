@@ -1,4 +1,4 @@
-from tinygrad.uop.ops import PatternMatcher, UPat, UOp, Ops, GroupOp
+from tinygrad.uop.ops import PatternMatcher, UPat, UOp, Ops, GroupOp, Invalid
 from tinygrad.dtype import AddrSpace
 
 # TODO: pm_mop_index from rangeify belongs here. this is all pattern matchers that strictly clean up movement ops
@@ -14,6 +14,9 @@ mop_cleanup = PatternMatcher([
   # merge PERMUTEs
   (UPat(Ops.PERMUTE, src=(UPat(Ops.PERMUTE, name="x2"), UPat()), name="x"),
    lambda x,x2: x2.src[0].permute(tuple(x2.marg[i] for i in x.marg))),
+  # canonicalize a view over an invalid to EXPAND(invalid)
+  (UPat(GroupOp.Movement-{Ops.PAD}, name="m", src=(UPat.any(UPat(Ops.EXPAND, src=(i:=UPat.cvar("i", arg=Invalid),), allow_any_len=True), \
+  i,),), allow_any_len=True), lambda m,i: i.expand(m.shape)),
   # STACK on INDEX CONST
   (UPat(Ops.STACK, src=UPat(Ops.INDEX, src=(UPat.var("src"), UPat(Ops.CONST))), name="stk"),
    lambda src,stk: src if stk.shape == src.shape and list(range(len(stk.src))) == [x.src[1].val for x in stk.src] else None),
