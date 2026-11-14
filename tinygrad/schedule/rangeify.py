@@ -5,10 +5,11 @@ from tinygrad.uop.ops import PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewr
 from tinygrad.uop.ops import AxisType
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.codegen.simplify import pm_reduce_simplify
-from tinygrad.helpers import dedup, VIZ, SPEC
+from tinygrad.helpers import dedup, VIZ, SPEC, MAX_KERNEL_BUFFERS
 from tinygrad.schedule.prepare import pm_gated_index
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.schedule.indexing import apply_reshape, apply_movement_op
+from tinygrad.device import DEV
 
 def new_ranges(shape:tuple[sint, ...], rid=itertools.count(1)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, -next(rid)) for sz in shape)
 
@@ -79,11 +80,11 @@ def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
         if not (kernel_boundary(sb:=s if x.op is Ops.CALL else s.base) or sb.is_variable): stageable[sb] = Stageable.FORCE
   return stageable
 
-def count_buffers(tsink:UOp) -> dict[UOp, Stageable]:
+def count_buffers(tsink:UOp, count_vars:bool=False) -> dict[UOp, Stageable]:
   info: dict[UOp, tuple[list[UOp], bool]] = {}
   stageable = count_uses(tsink)
   for x in tsink.toposort():
-    if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL}:
+    if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or (count_vars and x.is_variable):
       info[x] = ([x], False)
       continue
     src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
@@ -94,12 +95,14 @@ def count_buffers(tsink:UOp) -> dict[UOp, Stageable]:
       if v is Stageable.FORCE: bufs, red = [x], False
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (bufs, red)
-  return stageable
+  return stageable, info
 
 @dataclass
 class StageCtx:
   stageable: dict[UOp, Stageable]
+  info: dict[UOp, tuple[list[UOp], bool]]
   device: str|tuple[str, ...]
+  limit: int
 
 def insert_stage(ctx, s):
   if (v:=ctx.stageable.get(s)) is None: return s
@@ -107,6 +110,18 @@ def insert_stage(ctx, s):
 
 pm_insert_stages = PatternMatcher([
   (UPat(GroupOp.All-{Ops.STAGE,Ops.SINK}, name="x"), lambda ctx, x: x.replace(src=tuple(insert_stage(ctx, s) for s in x.src)))
+])
+
+def limit_buffers(ctx, s):
+  if len(dedup(sum((ctx.info.get(u, ([], False))[0] for u in s.src), []))) < ctx.limit or s.op not in GroupOp.Elementwise|{Ops.STACK}: return s
+  if s.op is Ops.STACK and (n:=len(s.src)) > ctx.limit: 
+    ctx.stageable.update({(l:=UOp.stack(*s.src[:n//2])):Stageable.FORCE, (r:=UOp.stack(*s.src[n//2:])):Stageable.FORCE})
+    return l.cat(r)
+  ctx.stageable.update({u:Stageable.FORCE for u in s.src if not u.is_virtual})
+  return s 
+
+pm_limit_buffers = PatternMatcher([
+  (UPat(GroupOp.All-{Ops.STAGE}, name="x"), lambda ctx, x: x.replace(src=tuple(limit_buffers(ctx, s) for s in x.src)))
 ])
 
 def stage_to_anon_store(stg:UOp):
@@ -176,7 +191,8 @@ def split_kernels(s:UOp) -> UOp:
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink:UOp) -> UOp:
-  tsink = graph_rewrite(tsink, pm_insert_stages, ctx=StageCtx(count_buffers(tsink), tsink.device), bottom_up=True, name="insert stages")
+  ctx = StageCtx(*count_buffers(tsink, DEV.device == 'WEBGPU'), tsink.device, MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(DEV.device, 0))
+  tsink = graph_rewrite(tsink, pm_limit_buffers+pm_insert_stages if ctx.limit else pm_insert_stages, ctx=ctx, bottom_up=True, name="insert stages")
   tsink = graph_rewrite(tsink, mop_cleanup+pm_stage_to_anon_store, walk=True, name="stage to anon store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
