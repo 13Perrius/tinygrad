@@ -1,7 +1,8 @@
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from tinygrad.uop.ops import PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint, AddrSpace, StageOpts
+from tinygrad.uop.ops import AxisType
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, VIZ, SPEC
@@ -151,22 +152,26 @@ pm_finalize_graph = PatternMatcher([
   (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *(s for s in r.src[1:] if s.op is not Ops.CONST))))
 ])
 
+@dataclass
+class SplitCtx:
+  rids: dict[tuple[AxisType, int], int]
+  args: list[UOp] = field(default_factory=list)
+
 def add_arg(ctx, x:UOp) -> UOp|None:
   if not kernel_boundary(x): return None
-  (args:=ctx[0]).append(x)
-  return x.param_like(slot=len(args)-1)
+  ctx.args.append(x)
+  return x.param_like(slot=len(ctx.args)-1)
 
-def add_range(ctx, r:UOp) -> UOp: return r.replace(arg=(r.arg[0], ctx[1][r.arg]))
+def add_range(ctx, r:UOp) -> UOp: return r.replace(arg=(r.arg[0], ctx.rids[r.arg]))
 
 pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
 
 def split_kernels(s:UOp) -> UOp:
-  args: list[UOp] = []
   # Codegen prefers that ranges are ordered and renumbered according to creation order.  Initial ID < 0 => a RANGE inserted by rangeify.
   rargs = [x.arg for x in s.toposort(gate=lambda x: not kernel_boundary(x)) if x.op is Ops.RANGE]
   rargs = sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1])))
-  s = graph_rewrite(s, pm_kernel, ctx=(args, {arg:i for i,arg in enumerate(rargs)}), bottom_up=True, walk=True, name="kernel")
-  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*args)
+  s = graph_rewrite(s, pm_kernel, ctx=(ctx:=SplitCtx({arg:i for i,arg in enumerate(rargs)})), bottom_up=True, walk=True, name="kernel")
+  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*ctx.args)
 
 pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
