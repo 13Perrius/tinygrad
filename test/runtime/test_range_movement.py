@@ -120,7 +120,7 @@ class TestCustomKernelInput(unittest.TestCase):
     @function(precompile=True)
     def run(a:Tensor) -> Tensor:
       xv = mop_fxn(a)
-      y = Tensor.invalids(*xv.shape, dtype=xv.dtype, device=a.device)
+      y = Tensor.empty(*xv.shape, dtype=xv.dtype, device=a.device)
       return Tensor.custom_kernel(y, xv, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x0).realize()

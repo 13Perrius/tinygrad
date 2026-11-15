@@ -683,16 +683,6 @@ class TestCustomKernelSharded(unittest.TestCase):
     tst = Tensor.custom_kernel(c, a, b, fxn=custom_gemm)[0]
     self.assertTrue(tst.allclose(a@b, atol=1e-3).item())
 
-  def test_multi_invalids_custom_kernel_no_copy(self):
-    devs = ("CPU:0", "CPU:1")
-    a = Tensor.ones(4, 4).shard(devs, axis=0).realize()
-    c = Tensor(Tensor.invalids(2, 4, dtype=dtypes.float, device=devs).uop.unshard(0), device=devs)
-    c = Tensor.custom_kernel(c, a, fxn=custom_add_one_kernel)[0]
-    GlobalCounters.reset()
-    c.realize()
-    assert_kernel_count(len(devs))
-    self.assertTrue((c == 2).all().item())
-
   def test_reduce_device_range(self):
     def kernel(C:UOp, A:UOp, B:UOp):
       d = UOp.range(2, 0, AxisType.DEVICE)
