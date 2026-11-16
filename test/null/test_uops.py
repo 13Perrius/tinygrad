@@ -5,7 +5,7 @@ from tinygrad.tensor import Tensor
 from tinygrad.helpers import Context, ceildiv, Timing, cdiv, Target
 from tinygrad.dtype import dtypes, DType, AddrSpace, ConstFloat, Invalid  # noqa: F401
 from tinygrad.device import Device
-from tinygrad.uop.ops import Ops, UOp, KernelInfo, AxisType
+from tinygrad.uop.ops import Ops, UOp, KernelInfo, AxisType, AddrSpace
 from tinygrad.renderer.cstyle import CStyleLanguage
 from tinygrad.codegen import to_program
 from tinygrad.codegen.opt import Opt, OptOps
@@ -62,7 +62,7 @@ class TestDTypeFromUOp(unittest.TestCase):
     for u in (UOp(Ops.STACK, src=(value, invalid)), UOp(Ops.ADD, src=(value, invalid)),
               UOp.const(True).where(value, invalid), UOp(Ops.CMPLT, src=(invalid, value)), UOp(Ops.CMPLT, src=(value, invalid)),
               UOp.param(0, dtypes.float32, 4).index(invalid)): type_verify(u, spec_shared)
-    gate, value = UOp.param(0, dtypes.bool, ()), UOp.param(1, dtypes.float, ())
+    gate, value = UOp.param(0, dtypes.bool, (), addrspace=AddrSpace.ALU), UOp.param(1, dtypes.float, (), addrspace=AddrSpace.ALU)
     self.assertIs((out:=graph_rewrite(gate.where(value, UOp.invalid()), pm_remove_invalid)).src[2], UOp.const(0, dtypes.float))
     type_verify(out.sink(), spec_program)
 
