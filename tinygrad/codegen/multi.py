@@ -22,7 +22,8 @@ def mstack_early_shrink(ms:UOp, shrink:UOp):
 
 def lower_broadcast_copy(c:UOp, x:UOp):
   if not (isinstance(c.device, tuple) and isinstance(x.device, str)): return None
-  if (sx:=x.simplify()).device is None: return sx
+  # a deviceless value has no storage to copy, each device computes it
+  if (sx:=x.simplify()).device is None: return UOp(Ops.MSTACK, src=tuple(sx.copy_to_device(d) for d in c.device))
   return UOp(Ops.MSTACK, src=tuple(x.pad_to(x.max_shape).contiguous().copy_to_device(d) for d in c.device)).shrink_to(c.shape)
 
 replace_allreduce = PatternMatcher([
@@ -35,6 +36,8 @@ replace_allreduce = PatternMatcher([
   (UPat(Ops.COPY, name="c", src=(UPat(name="x"),), allow_any_len=True), lambda c,x:
     (m if (m:=x.mselect(0)).device == c.device else m.copy_to_device(c.device))
     if isinstance(c.device, str) and isinstance(x.device, tuple) else None),
+  # MSELECT on MSTACK is replaced with nothing
+  (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstack"),), name="ms"), lambda mstack, ms: mstack.src[ms.arg]),
   # move shrink before MSTACK
   (UPat(Ops.SHRINK, src=(UPat(Ops.MSTACK, name="ms"),), allow_any_len=True, name="shrink"), mstack_early_shrink),
   # move MSELECT before movement/ALU ops
