@@ -127,7 +127,8 @@ pm_limit_buffers = PatternMatcher([
 def stage_to_anon_store(stg:UOp) -> UOp|None:
   # The buffer created here is inside the call and is not persisted, like the buffers created for copies.
   if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
-  alloc = UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)
+  if (device:=stg.arg.device) is None: raise RuntimeError("global storage needs a device, give the STAGE one")
+  alloc = UOp.alloc(stg.shape, stg.dtype, device=device)
   return alloc.base.after(alloc.index(*r).store(stg.src[0]).end(*r) if (r:=stg.src[1:]) else alloc.store(stg.src[0])).view_as(stg.shape)
 
 pm_stage_to_anon_store = PatternMatcher([
