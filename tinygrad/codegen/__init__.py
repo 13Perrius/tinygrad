@@ -29,7 +29,7 @@ from tinygrad.schedule.indexing import _stack_select
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
 from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing, pm_simplify_add_image
-from tinygrad.codegen.rangeify import BufferizeOpts, get_kernel_graph
+from tinygrad.codegen.rangeify import StageOpts, get_kernel_graph
 from tinygrad.codegen.memory import memory_plan_rewrite
 
 def _valid(i:UOp) -> UOp:
