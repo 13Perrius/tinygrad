@@ -35,8 +35,6 @@ replace_allreduce = PatternMatcher([
   (UPat(Ops.COPY, name="c", src=(UPat(name="x"),), allow_any_len=True), lambda c,x:
     (m if (m:=x.mselect(0)).device == c.device else m.copy_to_device(c.device))
     if isinstance(c.device, str) and isinstance(x.device, tuple) else None),
-  # MSELECT on MSTACK is replaced with nothing
-  (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstack"),), name="ms"), lambda mstack, ms: mstack.src[ms.arg]),
   # move shrink before MSTACK
   (UPat(Ops.SHRINK, src=(UPat(Ops.MSTACK, name="ms"),), allow_any_len=True, name="shrink"), mstack_early_shrink),
   # move MSELECT before movement/ALU ops
