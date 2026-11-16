@@ -80,7 +80,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
         if not (kernel_boundary(sb:=s if x.op is Ops.CALL else s.base) or sb.is_variable): stageable[sb] = Stageable.FORCE
   return stageable
 
-def count_buffers(tsink:UOp, count_vars:bool=False) -> dict[UOp, Stageable]:
+def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable], dict[UOp, tuple[list[UOp], bool]]]:
   info: dict[UOp, tuple[list[UOp], bool]] = {}
   stageable = count_uses(tsink)
   for x in tsink.toposort():
@@ -104,7 +104,7 @@ class StageCtx:
   device: str|tuple[str, ...]
   limit: int
 
-def insert_stage(ctx, s):
+def insert_stage(ctx, s:UOp) -> UOp:
   if (v:=ctx.stageable.get(s)) is None: return s
   return s.stage(arg=StageOpts(device=ctx.device if s.device is None else s.device) if v is Stageable.FORCE else None)
 
@@ -112,19 +112,19 @@ pm_insert_stages = PatternMatcher([
   (UPat(GroupOp.All-{Ops.STAGE,Ops.SINK}, name="x"), lambda ctx, x: x.replace(src=tuple(insert_stage(ctx, s) for s in x.src)))
 ])
 
-def limit_buffers(ctx, s):
+def limit_buffers(ctx, s:UOp) -> UOp:
   if len(dedup(sum((ctx.info.get(u, ([], False))[0] for u in s.src), []))) < ctx.limit or s.op not in GroupOp.Elementwise|{Ops.STACK}: return s
-  if s.op is Ops.STACK and (n:=len(s.src)) > ctx.limit: 
+  if s.op is Ops.STACK and (n:=len(s.src)) > ctx.limit:
     ctx.stageable.update({(l:=UOp.stack(*s.src[:n//2])):Stageable.FORCE, (r:=UOp.stack(*s.src[n//2:])):Stageable.FORCE})
     return l.cat(r)
   ctx.stageable.update({u:Stageable.FORCE for u in s.src if not u.is_virtual})
-  return s 
+  return s
 
 pm_limit_buffers = PatternMatcher([
   (UPat(GroupOp.All-{Ops.STAGE}, name="x"), lambda ctx, x: x.replace(src=tuple(limit_buffers(ctx, s) for s in x.src)))
 ])
 
-def stage_to_anon_store(stg:UOp):
+def stage_to_anon_store(stg:UOp) -> UOp|None:
   # The buffer created here is inside the call and is not persisted, like the buffers created for copies.
   if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
   alloc = UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)
