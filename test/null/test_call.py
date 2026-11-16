@@ -4,14 +4,14 @@ from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.codegen import to_program
 from tinygrad.helpers import Target
 from tinygrad.renderer.cstyle import ClangRenderer
-from tinygrad.uop.ops import KernelInfo, Ops
+from tinygrad.uop.ops import KernelInfo, Ops, AddrSpace
 from tinygrad.codegen import resolve_linear_call
 
 def sched_key(t:Tensor): return t.export()[0].key
 
 class TestCall(unittest.TestCase):
   def test_call_scalar_param_shape_mismatch(self):
-    scalar_fxn = UOp.param(0, dtypes.float, ()) * 2
+    scalar_fxn = UOp.param(0, dtypes.float, (), addrspace=AddrSpace.ALU) * 2
     with self.assertRaisesRegex(TypeError, "shape mismatch: expected scalar"):
       Tensor.call(Tensor.ones(2), fxn=scalar_fxn).realize()
 

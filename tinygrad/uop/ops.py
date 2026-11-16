@@ -1198,12 +1198,12 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @staticmethod
   def param(slot:int, dtype:DType, shape:tuple[sint, ...]|sint|None=None, device=None, vmin_vmax:tuple[PyConst, PyConst]|None=None,
             name=None, addrspace=AddrSpace.GLOBAL, volatile:bool=False, reg:Register|Reg|None=None):
-    """create a PARAM: a single sint or 1-d shape gives a flat param of that size, a None shape gives a scalar param.
+    """create a PARAM: a single sint or 1-d shape gives a flat param of that size, a None shape in the ALU address space gives a scalar param.
     src[0] stores the concrete max size (never symbolic): a multi-dim shape is a RESHAPE on top of the flat param,
     a symbolic shape is a max-size param shrunk to the real shape"""
     if dtype in dtypes.weaks: raise RuntimeError(f"cannot create param for weak dtype {dtype}")
     shape = (shape,) if isinstance(shape, (int, UOp)) else shape or ()
-    ret = UOp(Ops.PARAM, src=(shape_to_shape_arg((prod(to_max_shape(shape)),) if shape else ()),),
+    ret = UOp(Ops.PARAM, src=(shape_to_shape_arg((prod(to_max_shape(shape)),) if shape or addrspace is not AddrSpace.ALU else ()),),
               arg=ParamArg(slot, dtype, vmin_vmax, name, addrspace, device, volatile, reg=reg))
     return ret.view_as(shape)
   def param_like(self, slot:int, name:str|None=None):
