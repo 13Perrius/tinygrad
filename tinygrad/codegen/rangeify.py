@@ -159,6 +159,7 @@ def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   return None
 
 pm_finalize_graph = PatternMatcher([
+  (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstk"),), name="msel"), lambda msel, mstk: mstk.src[msel.arg]),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
   (UPat(GroupOp.Movement|{Ops.UNSHARD}, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
