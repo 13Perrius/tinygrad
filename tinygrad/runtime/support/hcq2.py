@@ -36,7 +36,7 @@ def get_enqueue_devs(call:UOp) -> tuple[str, ...]:
   return devs
 
 def unwrap_view(v:UOp) -> tuple[UOp, int]: # look through views to (base, byte offset)
-  if v.op in (Ops.BITCAST, Ops.AFTER): return unwrap_view(v.src[0])
+  while v.op in (Ops.BITCAST, Ops.AFTER): v = v.src[0]
   if v.op is not Ops.SHRINK: return v, 0
   base, off = unwrap_view(v.src[0])
   return base, off + v.src[1].val * v.dtype.itemsize
