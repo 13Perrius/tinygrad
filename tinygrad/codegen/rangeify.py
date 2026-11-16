@@ -19,7 +19,7 @@ def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
 
 pm_add_ranges = PatternMatcher([
   (UPat.var("dst").store(UPat.var("src")), lambda dst, src: dst.index(*(r:=new_ranges(dst.shape))).store(src.index(*r)).end(*r)),
-  (UPat.var("x").stage(name="stg"), lambda stg, x: x.index(*(r:=new_ranges(x.shape))).stage(*r) if stg.arg is None else None),
+  (UPat.var("x").stage(name="stg"), lambda stg, x: x.index(*(r:=new_ranges(x.shape))).stage(*r).view_as(x.shape) if stg.arg is None else None),
   (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg))
 ])
 
@@ -152,9 +152,9 @@ pm_compose_ranges = PatternMatcher([
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not kernel_boundary(x)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
   if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
-    frngs = apply_reshape(dst.shape, (st:=src.stage(*src.ranges)).shape, UOp.sink(*src.ranges)).src
+    frngs = apply_reshape(dst.shape, src_shape:=tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in src.ranges), UOp.sink(*src.ranges)).src
     store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
-    end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(st.shape))), bottom_up=True).end(*srngs)
+    end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(src_shape))), bottom_up=True).end(*srngs)
     return ind.store(end.buf_uop.after(end).index(*frngs))
   return None
 
