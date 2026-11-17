@@ -1,6 +1,6 @@
 import unittest
 from tinygrad import Tensor, UOp, function, Device
-from tinygrad.dtype import dtypes, AddrSpace
+from tinygrad.dtype import dtypes
 from tinygrad.codegen import to_program
 from tinygrad.helpers import Target
 from tinygrad.renderer.cstyle import ClangRenderer
