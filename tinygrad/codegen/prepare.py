@@ -1,9 +1,9 @@
 from dataclasses import replace
 from tinygrad.dtype import AddrSpace, dtypes, to_dtype
-from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, GroupOp, graph_rewrite, MapCtx, rewrite_group, identity_element, resolve_returned_after
+from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, GroupOp, graph_rewrite, MapCtx, rewrite_group, identity_element
+from tinygrad.uop.ops import resolve_returned_after, resolve
 from tinygrad.uop.movement import mop_cleanup
-from tinygrad.uop.symbolic import symbolic
-from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort, dedup
+from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort
 from tinygrad.codegen.indexing import apply_movement_op
 from tinygrad.codegen.allreduce import create_allreduce_function
 from tinygrad.codegen.multi import multi_pm

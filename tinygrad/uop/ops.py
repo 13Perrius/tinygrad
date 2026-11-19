@@ -901,7 +901,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   def contiguous_view(self) -> tuple[UOp, int]|None:
     from tinygrad.codegen import pm_mop_index
-    from tinygrad.schedule.prepare import pm_gated_index
+    from tinygrad.codegen.prepare import pm_gated_index
     from tinygrad.uop.symbolic import symbolic
 
     # WEBGPU and CL do not support views.

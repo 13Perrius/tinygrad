@@ -23,13 +23,13 @@ from tinygrad.codegen.decomp.transcendental import get_transcendental_patterns
 from tinygrad.codegen.opt.postrange import apply_opts
 from tinygrad.codegen.late.gater import pm_move_gates_from_index
 from tinygrad.codegen.simplify import pm_simplify_ranges, pm_flatten_range, pm_split_ranges, pm_load_collapse, pm_reduce_unparented
-from tinygrad.schedule.multi import multi_pm
-from tinygrad.schedule.prepare import pm_mop_index, pm_gated_index, expand_bitcast, prepare_rangeify
-from tinygrad.schedule.indexing import _stack_select
+from tinygrad.codegen.multi import multi_pm
+from tinygrad.codegen.prepare import pm_gated_index, expand_bitcast, prepare_rangeify
+from tinygrad.codegen.indexing import apply_movement_op
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
 from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing, pm_simplify_add_image
-from tinygrad.codegen.rangeify import StageOpts, get_kernel_graph
+from tinygrad.codegen.rangeify import StageOpts, get_kernel_graph, stack_select
 from tinygrad.codegen.memory import memory_plan_rewrite
 
 def _valid(i:UOp) -> UOp:
@@ -701,7 +701,7 @@ def copy_kernel_to_store(call:UOp, dst:UOp, src:UOp, n:UOp, r:UOp|None=None):
 def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
   if dst.is_virtual or src.is_virtual or (dst.device == src.device and not dst.on_disk()): return None
-  sink = graph_rewrite(ast, sym+pm_mops+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
+  sink = graph_rewrite(ast, sym+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
   # the simplified body is kept only if it is a copy, any other kernel goes to codegen unchanged
   return pm_copy_kernel.rewrite(call.replace(src=(sink,) + call.src[1:]))
 

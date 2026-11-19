@@ -6,9 +6,9 @@ from tinygrad.uop.ops import AxisType
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, VIZ, SPEC, MAX_KERNEL_BUFFERS
-from tinygrad.schedule.prepare import pm_gated_index
+from tinygrad.codegen.prepare import pm_gated_index
 from tinygrad.uop.movement import mop_cleanup
-from tinygrad.schedule.indexing import apply_reshape, apply_movement_op
+from tinygrad.codegen.indexing import apply_reshape, apply_movement_op
 from tinygrad.device import DEV
 
 def new_ranges(shape:tuple[sint, ...], rid=itertools.count(1)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, -next(rid)) for sz in shape)
