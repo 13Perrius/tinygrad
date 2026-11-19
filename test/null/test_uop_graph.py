@@ -404,7 +404,6 @@ class TestUOpGraph(unittest.TestCase):
 
   def test_after_end(self):
     r = UOp.range(10, 0)
-
     c = r + 1
     self.assertIn(r, c.ranges)
 
@@ -412,7 +411,7 @@ class TestUOpGraph(unittest.TestCase):
     self.assertNotIn(r, e.ranges)
     group = UOp.group(e, None, e)
     self.assertIs(group, UOp(Ops.STACK).after(e, e))
-    self.assertIs(group.simplify(), UOp(Ops.STACK).after(e))
+    self.assertIs(group.simplify(), UOp(Ops.STACK))
 
     a = c.after(e)
     self.assertNotIn(r, a.ranges)
