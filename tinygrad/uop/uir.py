@@ -20,7 +20,7 @@ from typing import Any, Callable
 from tinygrad import dtype
 from tinygrad.dtype import dtypes, DType, AddrSpace, Invalid
 from tinygrad.uop import Ops, GroupOp, ops
-from tinygrad.uop.ops import UOp, KernelInfo, CallInfo, NativeInfo, ProgramInfo, ParamArg, AxisType
+from tinygrad.uop.ops import UOp, KernelInfo, CallInfo, NativeInfo, ProgramInfo, ParamArg, AxisType, StageOpts
 from tinygrad.helpers import colored, ansistrip, Target
 
 # ***** render *****
