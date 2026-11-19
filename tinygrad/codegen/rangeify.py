@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from tinygrad.uop.ops import PatternMatcher, UOp, UPat, GroupOp, Ops, graph_rewrite, KernelInfo, BottomUpGate, resolve, sint, AddrSpace, StageOpts
 from tinygrad.uop.ops import AxisType
-from tinygrad.uop.symbolic import symbolic
+from tinygrad.uop.symbolic import symbolic, invalid_pat
 from tinygrad.codegen.simplify import pm_reduce_simplify
 from tinygrad.helpers import dedup, VIZ, SPEC, MAX_KERNEL_BUFFERS
 from tinygrad.codegen.prepare import pm_gated_index
@@ -11,7 +11,8 @@ from tinygrad.uop.movement import mop_cleanup
 from tinygrad.codegen.indexing import apply_reshape, apply_movement_op
 from tinygrad.device import DEV
 
-def new_ranges(shape:tuple[sint, ...], rid=itertools.count(1)) -> tuple[UOp, ...]: return tuple(UOp.range(sz, -next(rid)) for sz in shape)
+def new_ranges(shape:tuple[sint, ...], rid=itertools.count(1)) -> tuple[UOp, ...]:
+  return tuple(UOp.range(sz, -next(rid), AxisType.WEAK) for sz in shape)
 
 def broadcast_ranges(x:UOp, s:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if x.op not in GroupOp.Broadcastable: return rngs
@@ -53,7 +54,8 @@ def convert_pad_to_where(ind:UOp, x:UOp) -> UOp:
 
 pm_convert_ranges = PatternMatcher([
   (UPat(Ops.STACK, name="x").index(name="ind", allow_any_len=True), convert_stack_to_where),
-  (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_pad_to_where)
+  (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_pad_to_where),
+  (UPat.var("x").after(UPat.var("x").index(allow_any_len=True).store(invalid_pat).end(allow_any_len=True)).index(allow_any_len=True), lambda x, i: i)
 ])
 
 Stageable = Enum('Stageable', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
@@ -164,9 +166,8 @@ pm_finalize_graph = PatternMatcher([
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
   (UPat(GroupOp.Movement|{Ops.UNSHARD}, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
-  (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP)),
-  (UPat(Ops.NOOP, name="n").end(allow_any_len=True), lambda n: n),
-  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *(s for s in r.src[1:] if s.op is not Ops.CONST))))
+  (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP).after(*a.src[1:]) if (a:=x.src[0]).op is Ops.AFTER else UOp(Ops.NOOP)),
+  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *(s for s in r.src[1:] if s.op is not Ops.CONST)))),
 ])
 
 @dataclass
