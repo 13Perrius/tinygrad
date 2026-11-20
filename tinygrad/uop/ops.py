@@ -855,7 +855,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @recursive_property
   def device(self) -> str|tuple[str, ...]|None:
     if self.op is Ops.PARAM: return self.arg.device
-    if self.op is Ops.STAGE: return self.arg.device if self.arg is not None else self.src[0].device
+    if self.op is Ops.STAGE: return self.src[0].device if self.arg is None else self.arg.device
     if self.op is Ops.AFTER: return self.src[0].device
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
@@ -883,7 +883,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.op is Ops.LOAD: return AddrSpace.ALU # LOAD brings things into the ALU
     if self.op in {Ops.INDEX, Ops.CAST, Ops.AFTER, Ops.REDUCE, Ops.MSTACK, Ops.MSELECT, Ops.END, Ops.UNSHARD}:
       return self.src[0].addrspace
-    if self.op is Ops.STAGE: return self.arg.addrspace if self.arg is not None else self.src[0].addrspace
     if self.op in GroupOp.Movement: return self.src[0].addrspace
     if self.op in {Ops.STACK, Ops.WMMA} or self.op in GroupOp.Elementwise:
       ad = [x.addrspace for x in self.src if x.addrspace is not None]
