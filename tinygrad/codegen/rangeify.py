@@ -49,7 +49,7 @@ def convert_stack_to_where(ind:UOp, x:UOp) -> UOp: return stack_select(ind.src[1
 
 def convert_pad_to_where(ind:UOp, x:UOp) -> UOp:
   rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, ind.src[1:])
-  valid = UOp.const(True).uprod(*(r.get_valid() for r in rngs))
+  valid = UOp.const(True).uprod(*[r.get_valid() for r in rngs])
   return valid.where(x.src[0].index(*rngs), UOp.const(x.dtype.const(0)))
 
 pm_convert_ranges = PatternMatcher([
@@ -89,7 +89,7 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
     if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or (count_vars and x.is_variable):
       info[x] = ([x], False)
       continue
-    src_bufs, src_red = zip(*(info[s] for s in x.src)) if x.src else ([], [])
+    src_bufs, src_red = zip(*[info[s] for s in x.src]) if x.src else ([], [])
     bufs, red = dedup(sum(src_bufs, [])), any(src_red)
     if x.op is Ops.REDUCE and bufs: red = True
     if (v:=stageable.get(x)) is not None:
@@ -167,7 +167,7 @@ pm_finalize_graph = PatternMatcher([
   (UPat(GroupOp.Movement|{Ops.UNSHARD}, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
   (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP).after(*a.src[1:]) if (a:=x.src[0]).op is Ops.AFTER else UOp(Ops.NOOP)),
-  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *(s for s in r.src[1:] if s.op is not Ops.CONST)))),
+  (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *[s for s in r.src[1:] if s.op is not Ops.CONST]))),
 ])
 
 @dataclass
