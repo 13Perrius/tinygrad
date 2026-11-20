@@ -684,7 +684,7 @@ def assert_all_same_devices(ast:UOp):
   devices = dedup([x.device for x in ast.toposort() if x.op is Ops.PARAM and x.device is not None])
   if len(devices) >= 2: raise RuntimeError(f"all buffers must be on the same device: {devices}")
 
-def copy_kernel_to_store(call:UOp, dst:UOp, src:UOp, n:UOp, r:UOp|None=None):
+def copy_kernel_to_store(call:UOp, dst:UOp, src:UOp, n:UOp|None=None, r:UOp|None=None):
   if dst.device == src.device and not dst.on_disk(): return None
   return call.replace(src=(dst.store(src),) + call.src[1:])
 
@@ -701,7 +701,8 @@ def copy_pat(n:UPat, i:UPat) -> UPat:
 
 # a bulk STORE copies whole buffers, so lower only kernels that copy every i in range(n). a size 1 copy has its range folded to 0
 pm_copy_kernel = PatternMatcher([
-  (UPat(Ops.CALL, src=(copy_pat(UPat.cvar("n", arg=1), UPat.cvar(arg=0)).sink(),), name="call", allow_any_len=True), copy_kernel_to_store),
+  (UPat(Ops.CALL, src=(copy_pat(UPat.any(UPat.const(1), UPat(Ops.STACK, src=())), UPat.cvar(arg=0)).sink(),),
+        name="call", allow_any_len=True), copy_kernel_to_store),
   (UPat(Ops.CALL, src=(copy_pat(UPat.var("n"), UPat(Ops.RANGE, src=(UPat.var("n"),), name="r")).end(UPat(Ops.RANGE, name="r")).sink(),),
         name="call", allow_any_len=True), copy_kernel_to_store),
 ])

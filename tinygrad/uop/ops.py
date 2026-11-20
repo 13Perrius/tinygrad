@@ -1170,7 +1170,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     ret = UOp(Ops.ALLOC, src=(shape_to_shape_arg((prod(to_max_shape(shape)),)),)+UOp.device_range_src(device),
               arg=ParamArg(next(UOp.unique_num) if slot is None else slot, strong_dtype(dtype),
                            addrspace=addrspace, device=device, spec=spec, bind_on_realize=bind_on_realize, name=name, reg=reg))
-    return ret.view_as(shape, axis)
+    return ret.reshape(()) if not shape else ret.view_as(shape, axis)
   @staticmethod
   def extern(shape:tuple[int, ...], dtype:DType, device, name:str): return UOp.alloc(shape, dtype, 0, device=device, name=name).replace(op=Ops.EXTERN)
   def alloc_like(self, slot:int|None=None, addrspace=AddrSpace.GLOBAL): return UOp.alloc(self.max_shard_shape, self.dtype, slot, addrspace)
@@ -1198,12 +1198,12 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @staticmethod
   def param(slot:int, dtype:DType, shape:tuple[sint, ...]|sint|None=None, device=None, vmin_vmax:tuple[PyConst, PyConst]|None=None,
             name=None, addrspace=AddrSpace.GLOBAL, volatile:bool=False, reg:Register|Reg|None=None):
-    """create a PARAM: a single sint or 1-d shape gives a flat param of that size, a None shape in the ALU address space gives a scalar param.
+    """create a PARAM: a single sint or 1-d shape gives a flat param of that size, a None shape gives a scalar param.
     src[0] stores the concrete max size (never symbolic): a multi-dim shape is a RESHAPE on top of the flat param,
     a symbolic shape is a max-size param shrunk to the real shape"""
     if dtype in dtypes.weaks: raise RuntimeError(f"cannot create param for weak dtype {dtype}")
     shape = (shape,) if isinstance(shape, (int, UOp)) else shape or ()
-    ret = UOp(Ops.PARAM, src=(shape_to_shape_arg((prod(to_max_shape(shape)),) if shape or addrspace is not AddrSpace.ALU else ()),),
+    ret = UOp(Ops.PARAM, src=(shape_to_shape_arg((prod(to_max_shape(shape)),) if shape else ()),),
               arg=ParamArg(slot, dtype, vmin_vmax, name, addrspace, device, volatile, reg=reg))
     return ret.view_as(shape)
   def param_like(self, slot:int, name:str|None=None):
@@ -1217,7 +1217,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def view_as(self:UOp, shape:tuple[sint, ...], axis:int|None=None) -> UOp:
     """view flat storage as the given (possibly symbolic) shape, optionally sharded on axis, the UNSHARD gives back the multiplied shape"""
     max_shape = to_max_shape(shape)
-    ret = self.reshape(max_shape)
+    ret = self.reshape(max_shape) if shape else self
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 
