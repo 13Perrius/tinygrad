@@ -3,7 +3,8 @@ from tinygrad.dtype import AddrSpace, dtypes, to_dtype
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, GroupOp, graph_rewrite, MapCtx, rewrite_group, identity_element
 from tinygrad.uop.ops import resolve_returned_after, resolve
 from tinygrad.uop.movement import mop_cleanup
-from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort
+from tinygrad.uop.symbolic import symbolic
+from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort, dedup
 from tinygrad.codegen.indexing import apply_movement_op
 from tinygrad.codegen.allreduce import create_allreduce_function
 from tinygrad.codegen.multi import multi_pm
@@ -61,6 +62,26 @@ pm_fold_moved_after = PatternMatcher([
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
+def _valid(i:UOp) -> UOp:
+  # an index is invalid where its valid is false, the gates inside the index math are lifted out first
+  if any(x.is_invalid for x in i.get_idx().backward_slice): i = graph_rewrite(i, symbolic, name="lift gates")
+  return i.get_valid()
+
+# movement op on INDEX as a PatternMatcher
+def _mop_index(r:UOp, idx:UOp):
+  idxs, in_shape, arg = idx.src[1:], r.src[0].shape, r.marg
+  if partial := len(idxs) != len(r.shape):
+    src_prefix = len(in_shape) - len(r.shape[len(idxs):])
+    if r.op is not Ops.RESHAPE or src_prefix < 0 or in_shape[src_prefix:] != r.shape[len(idxs):]: return None
+    in_shape, arg = in_shape[:src_prefix], r.shape[:len(idxs)]
+  new_idxs = apply_movement_op(r.op, in_shape, arg, idxs)
+  kept = {UOp.const(True)} | {c for i in new_idxs for c in _valid(i).split_uop(Ops.AND)}
+  dropped = dedup(c for i in idxs for c in _valid(i).split_uop(Ops.AND) if c not in kept)
+  if (ret := r.src[0].index(*new_idxs, arg=idx.arg)).shape != idx.shape and partial: return None
+  # the gates the movement op dropped from the indexes still gate the value
+  if dropped: ret = dropped[0].uprod(*dropped[1:]).where(ret, ret.dtype.const(0))
+  return ret.after(*[i for i in idxs if i.op_in_backward_slice_with_self(*GroupOp.Effect)])
+
 pm_gated_index = PatternMatcher([
   # A store through a padded view gates the destination index, not its loaded value.
   (UPat.var("a").where(UPat.var("b").where(UPat.var("dst"), 0), UPat.var("pad")).store(UPat.var("val")),
@@ -71,6 +92,8 @@ pm_gated_index = PatternMatcher([
   (UPat(Ops.INDEX, src=(UPat(Ops.AFTER, name="a"),), allow_any_len=True, name="x"),
    lambda a,x: a.src[0].index(*x.src[1:]).after(*a.src[1:]) if a.addrspace is AddrSpace.ALU else None),
 ])
+
+pm_mops = PatternMatcher([(UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index)])+pm_gated_index
 
 # *****************
 # 0. do some cleanup rewrites, mostly copied from the old stuff
@@ -223,8 +246,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   (UPat(GroupOp.All-{Ops.SINK}, name="x"), lambda x: x.const_like(0) if x._shape is not None and 0 in x.shape else None),
 
   # remove zero-offset slices of CALL srcs
-  (UPat(Ops.CALL, name="c"), lambda c: c.replace(src=(c.body, \
-   *[s.src[0] if s.op is Ops.SHRINK and all(resolve(o == 0, default=False) for o,sz in s.marg) else s for s in c.src_without_body]))),
+  (UPat(Ops.CALL, name="c"), lambda c: c.replace(src=(c.body,
+   *[s.src[0] if s.op is Ops.SHRINK and all(resolve(o == 0, default=False) for o,_ in s.marg) else s for s in c.src_without_body]))),
 
   # remove movement ops from SINK/AFTER. TODO: should be generic
   (UPat(Ops.SINK, name="s"), lambda s: s.replace(src=tuple(walk_mop(u) for u in s.src if u.op is not Ops.NOOP))),
