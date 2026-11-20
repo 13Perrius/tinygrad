@@ -24,22 +24,17 @@ pm_add_ranges = PatternMatcher([
   (UPat.var("x").reduce(name="r", allow_any_len=True), lambda r, x: x.reduce(*new_ranges(x.shape[:r.arg[1]]), *r.src[1:], arg=r.arg))
 ])
 
-def push_ranges(ind:UOp, x:UOp) -> UOp|None:
-  if x.op is Ops.REDUCE:
-    return x.src[0].index(*(rr:=x.src[1:])[:x.arg[1]], *ind.src[1:]).reduce(*rr, arg=(x.arg[0], 0))
-  elif x.op in GroupOp.Elementwise:
-    rngs = ind.src[1:]
-    return x.replace(src=tuple(s if s.op is Ops.CONST else s.index(*broadcast_ranges(x, s, rngs)) for s in x.src))
-  return None
-
 pm_push_ranges = PatternMatcher([
   (UPat.var("x").index(name="j", allow_any_len=True).index(name="i", allow_any_len=True), lambda i, j, x: x.index(*j.src[1:], *i.src[1:])),
-  (UPat.var("x").index(name="ind", allow_any_len=True), push_ranges),
+  (UPat(GroupOp.Elementwise, name="x").index(name="ind", allow_any_len=True),
+  lambda ind, x: x.replace(src=tuple(s if s.op is Ops.CONST else s.index(*broadcast_ranges(x, s, ind.src[1:])) for s in x.src))),
+  (UPat.var("x").reduce(name="r", allow_any_len=True).index(name="ind", allow_any_len=True),
+  lambda ind, r, x: x.index(*(rr:=r.src[1:])[:r.arg[1]], *ind.src[1:]).reduce(*rr, arg=(r.arg[0], 0))),
   (UPat(GroupOp.Movement, name="m", src=(UPat.var("x"),), allow_any_len=True).index(name="ind", allow_any_len=True),
   lambda ind, m, x: x.index(*apply_movement_op(m.op, x.shape, m.marg, ind.src[1:])))
 ])
 
-def stack_select(rcmp, srcs):
+def stack_select(rcmp:UOp, srcs:list[UOp]) -> UOp:
   # MSB-first bit tree.
   if len(srcs) == 1: return srcs[0]
   half = 1 << ((len(srcs)-1).bit_length()-1)
@@ -58,7 +53,8 @@ pm_convert_ranges = PatternMatcher([
   (UPat.var("x").after(UPat.var("x").index(allow_any_len=True).store(invalid_pat).end(allow_any_len=True)).index(allow_any_len=True), lambda x, i: i)
 ])
 
-Stageable = Enum('Stageable', [('CANDIDATE', 0), ('RANGES', 1), ('FORCE', 2)])
+# A stageable uop is a candidate for staging to the global address space.
+Stageable = Enum('Stageable', [('CANDIDATE'), ('RANGES'), ('FORCE')])
 
 def kernel_boundary(x:UOp) -> bool:
   return x.has_buffer_identity(after_ok=True) or (x.op is Ops.STAGE and x.arg is not None and x.arg.addrspace is AddrSpace.GLOBAL)
@@ -89,12 +85,14 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
     if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or (count_vars and x.is_variable):
       info[x] = ([x], False)
       continue
-    src_bufs, src_red = zip(*[info[s] for s in x.src]) if x.src else ([], [])
-    bufs, red = dedup(sum(src_bufs, [])), any(src_red)
+    bufs = dedup([b for s in x.src for b in info[s][0]])
+    red = any(info[s][1] for s in x.src) or (x.op is Ops.REDUCE and bufs)
     if x.op is Ops.REDUCE and bufs: red = True
     if (v:=stageable.get(x)) is not None:
+      # A candidate is staged if it contains >3 buffers, a reduce over a buffer, or was already forced.  A scalar is never staged.
       if (len(bufs) > 3 or red) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
       if v is Stageable.FORCE: bufs, red = [x], False
+      # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.  
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (bufs, red)
   return stageable, info
@@ -129,8 +127,8 @@ pm_limit_buffers = PatternMatcher([
 def stage_to_anon_store(stg:UOp) -> UOp|None:
   # The buffer created here is inside the call and is not persisted, like the buffers created for copies.
   if stg.arg is None or stg.arg.addrspace is not AddrSpace.GLOBAL: return None
-  if (device:=stg.arg.device) is None: raise RuntimeError("global storage needs a device, give the STAGE one")
-  alloc = UOp.alloc(stg.shape, stg.dtype, device=device)
+  if stg.arg.device is None: raise RuntimeError("global storage needs a device, give the STAGE one")
+  alloc = UOp.alloc(stg.shape, stg.dtype, device=stg.arg.device)
   return alloc.base.after(alloc.index(*r).store(stg.src[0]).end(*r) if (r:=stg.src[1:]) else alloc.store(stg.src[0])).view_as(stg.shape)
 
 pm_stage_to_anon_store = PatternMatcher([
@@ -138,35 +136,28 @@ pm_stage_to_anon_store = PatternMatcher([
   (UPat((Ops.MSELECT, Ops.MSTACK), name="m"), lambda m: m.replace(src=tuple(s.base for s in m.src)).view_as(m.shape))
 ])
 
-def substitute_ranges(ctx, x:UOp) -> UOp|None:
-  if not any(r in ctx for r in x.ranges): raise BottomUpGate()
-  return ctx.get(x)
-
-pm_substitute_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), substitute_ranges)])
-
-def compose_ranges(ind:UOp, stg:UOp) -> UOp:
-  return graph_rewrite(stg.src[0], pm_substitute_ranges, ctx=dict(zip(stg.src[1:], ind.src[1:])), bottom_up=True)
-
-pm_compose_ranges = PatternMatcher([
-  # This is where a stage inserted via Stageable.RANGES is folded away.
-  (UPat(Ops.STAGE, name="stg").index(name="ind", allow_any_len=True), lambda ind, stg: compose_ranges(ind, stg) if stg.arg is None else None),
-])
-
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not kernel_boundary(x)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
-  if any(r.src[1].get_idx() is not ind.src[1].get_idx() for r in reads):
-    frngs = apply_reshape(dst.shape, src_shape:=tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in src.ranges), UOp.sink(*src.ranges)).src
-    store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
-    end = graph_rewrite(store, pm_substitute_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(src_shape))), bottom_up=True).end(*srngs)
-    return ind.store(end.buf_uop.after(end).index(*frngs))
-  return None
+  if all(r.src[1].get_idx() is ind.src[1].get_idx() for r in reads): return None
+  frngs = apply_reshape(dst.shape, src_shape:=tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in src.ranges), UOp.sink(*src.ranges)).src
+  store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
+  end = graph_rewrite(store, pm_gate_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(src_shape))), bottom_up=True).end(*srngs)
+  return ind.store(end.buf_uop.after(end).index(*frngs))
+
+def gate_ranges(ctx, x:UOp) -> None:
+  if not any(r in ctx for r in x.ranges): raise BottomUpGate()
+
+pm_gate_ranges = PatternMatcher([(UPat(GroupOp.All, name="x"), gate_ranges)])
 
 pm_finalize_graph = PatternMatcher([
-  (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstk"),), name="msel"), lambda msel, mstk: mstk.src[msel.arg]),
+  # This is where a stage inserted via RANGES is folded away.
+  (UPat.var("x").stage(name="stg", allow_any_len=True).index(name="ind", allow_any_len=True),
+  lambda ind, stg, x: x.substitute(dict(zip(stg.src[1:], ind.src[1:])), extra_pm=pm_gate_ranges) if stg.arg is None else None),
   (UPat.var("x").index(), lambda x: x.index(UOp.const(0)) if x.has_buffer_identity(after_ok=True) else x),
   (UPat(GroupOp.Movement|{Ops.UNSHARD}, name="m", src=(UPat.var("x"),), allow_any_len=True), lambda m, x: x),
   (UPat.var("dst").index(name="ind", allow_any_len=True).store(UPat.var("src")), fix_store_hazard),
   (UPat.var("x").store(UPat.var("x")), lambda x: UOp(Ops.NOOP).after(*a.src[1:]) if (a:=x.src[0]).op is Ops.AFTER else UOp(Ops.NOOP)),
+  (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstk"),), name="msel"), lambda msel, mstk: mstk.src[msel.arg]),
   (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *[s for s in r.src[1:] if s.op is not Ops.CONST]))),
 ])
 
@@ -199,7 +190,7 @@ def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, mop_cleanup+pm_stage_to_anon_store, walk=True, name="stage to anon store")
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
-  tsink = graph_rewrite(tsink, pm_compose_ranges+pm_finalize_graph+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
+  tsink = graph_rewrite(tsink, pm_finalize_graph+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
   tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
