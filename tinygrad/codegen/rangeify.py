@@ -92,7 +92,7 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
       # A candidate is staged if it contains >3 buffers, a reduce over a buffer, or was already forced.  A scalar is never staged.
       if (len(bufs) > 3 or red) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
       if v is Stageable.FORCE: bufs, red = [x], False
-      # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.  
+      # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (bufs, red)
   return stageable, info
@@ -198,4 +198,3 @@ def get_kernel_graph(tsink:UOp) -> UOp:
     from tinygrad.uop.spec import type_verify, spec_kernel_graph
     type_verify(tsink, spec_kernel_graph)
   return tsink
-
