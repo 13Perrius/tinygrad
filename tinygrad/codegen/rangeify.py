@@ -85,16 +85,17 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
     if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or (count_vars and x.is_variable):
       info[x] = ([x], False)
       continue
-    bufs = dedup([b for s in x.src for b in info[s][0]])
-    red = any(info[s][1] for s in x.src) or (x.op is Ops.REDUCE and bufs)
-    if x.op is Ops.REDUCE and bufs: red = True
+    buffers = dedup([b for s in x.src for b in info[s][0]])
+    reduce = any(info[s][1] for s in x.src)
+    if x.op is Ops.REDUCE and buffers and not ((e:=x.src[0]).op is Ops.EXPAND and x.arg[0] is Ops.ADD and x.arg[1] <= e.ndim-e.src[0].ndim):
+      reduce = True
     if (v:=stageable.get(x)) is not None:
-      # A candidate is staged if it contains >3 buffers, a reduce over a buffer, or was already forced.  A scalar is never staged.
-      if (len(bufs) > 3 or red) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
-      if v is Stageable.FORCE: bufs, red = [x], False
+      # A candidate is staged if it contains >3 buffers, a reduceuce over a buffer, or was already forced.  A scalar is never staged.
+      if (len(buffers) > 3 or reduce) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
+      if v is Stageable.FORCE: buffers, reduce = [x], False
       # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
-    info[x] = (bufs, red)
+    info[x] = (buffers, reduce)
   return stageable, {x:b for x,(b,_) in info.items()}
 
 @dataclass
