@@ -90,7 +90,7 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
     if x.op is Ops.REDUCE and buffers and not ((e:=x.src[0]).op is Ops.EXPAND and x.arg[0] is Ops.ADD and x.arg[1] <= e.ndim-e.src[0].ndim):
       reduce = True
     if (v:=stageable.get(x)) is not None:
-      # A candidate is staged if it contains >3 buffers, a reduceuce over a buffer, or was already forced.  A scalar is never staged.
+      # A candidate is staged if it contains >3 buffers, a reduce over a buffer, or was already forced.  A scalar is never staged.
       if (len(buffers) > 3 or reduce) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
       if v is Stageable.FORCE: buffers, reduce = [x], False
       # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
