@@ -188,6 +188,7 @@ indent-width = 2
 exclude = [
   ".git/",
   "docs/",
+  "tinygrad-base/",
   "extra/",
   "test/external/mlperf_resnet",
   "test/external/mlperf_unet3d",

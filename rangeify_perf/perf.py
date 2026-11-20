@@ -22,12 +22,14 @@ dumps = os.path.join(perf_dir, "dumps")
 save_keys = os.path.join(perf_dir, "save_keys.tmp")
 python = os.path.normpath(os.path.join(perf_dir, "../venv/bin/python"))
 repo_root = os.path.normpath(os.path.join(perf_dir, ".."))
-trees_dir = os.path.dirname(repo_root)
+# tree label -> source root. tinygrad-base is a submodule pinned to the commit the fork rebases on
+trees = {"tinygrad-base": os.path.join(repo_root, "tinygrad-base"), "tinygrad-fork": repo_root}
 
-def tree_name(): return os.path.basename(os.path.normpath(os.environ.get("PYTHONPATH", repo_root)))
+# the label is passed explicitly, so keys don't depend on the name of the directory the repo is cloned into
+def tree_name(): return os.environ["PERF_TREE"]
 
 def variant_env(base, tree, r):
-  env = {k:v for k,v in base.items() if k != "R"} | {"PYTHONPATH": os.path.join(trees_dir, tree)}
+  env = {k:v for k,v in base.items() if k != "R"} | {"PYTHONPATH": trees[tree], "PERF_TREE": tree}
   return env if r is None else env | {"R": r}
 
 def path_from_key(key, subdir): return os.path.join(subdir, key)
@@ -82,15 +84,17 @@ def save_uop(patches):
           # Fresh tensors have to get created per patch in order to force realization.
           Tensor.realize(*(Tensor(u) for u in uops))
         except Stop as e:
-          # function name e.g. mnist, patch name, initial uops key, stopped uops key, tree name, R value
-          key = ':'.join((fxn.__name__, patch.__name__, UOp.sink(*uops).key.hex(), UOp.sink(*e.uops).key.hex(), tree_name(), str(os.environ.get("R"))))
-          keys.append(key)
-          if not os.path.exists(path:=os.path.join(pickles, key)):
-            with open(path, mode="xb") as f: pickle.dump(e.uops, f)
-        else: 
+          stopped = e.uops
+        else:
           raise Exception("patch must raise stop exception")
         finally:
           restore()
+        # pickle after restore: pickling a realized Buffer copies it out, which can run (and so hit) the patched codegen
+        # function name e.g. mnist, patch name, initial uops key, stopped uops key, tree name, R value
+        key = ':'.join((fxn.__name__, patch.__name__, UOp.sink(*uops).key.hex(), UOp.sink(*stopped).key.hex(), tree_name(), str(os.environ.get("R"))))
+        keys.append(key)
+        if not os.path.exists(path:=os.path.join(pickles, key)):
+          with open(path, mode="xb") as f: pickle.dump(stopped, f)
       with open(save_keys, mode="x") as f: f.write("\n".join(keys))
     return decorated
   return decorator

@@ -18,7 +18,7 @@ def run_scheduler(key):
   linear = graph_rewrite(call, pm_schedule, name="schedule to linear", enter_calls=True)
   end = time.perf_counter_ns()
 
-  res = end-start
+  res = {"run_scheduler": end-start}
   with open(os.path.join(benchmarks, key), mode="wb") as f: pickle.dump(res, f)
 
 @disable_gc()
@@ -31,7 +31,7 @@ def run_codegen(key):
   for ast, renderer in todo.values(): do_to_program(ast, renderer)
   end = time.perf_counter_ns()
 
-  res = end-start
+  res = {"run_codegen": end-start}
   with open(os.path.join(benchmarks, key), mode="wb") as f: pickle.dump(res, f)
 
 PATCH_FXNS = {"patch_scheduler": run_scheduler, "patch_codegen": run_codegen, "patch_debug_2_runtime": run_debug_2_runtime}
