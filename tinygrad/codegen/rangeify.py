@@ -53,21 +53,20 @@ pm_convert_ranges = PatternMatcher([
   (UPat.var("x").after(UPat.var("x").index(allow_any_len=True).store(invalid_pat).end(allow_any_len=True)).index(allow_any_len=True), lambda x, i: i)
 ])
 
-# A stageable uop is a candidate for staging to the global address space.
+# A stageable uop is a candidate to be staged to the global address space.
 Stageable = Enum('Stageable', [('CANDIDATE'), ('RANGES'), ('FORCE')])
 
 def kernel_boundary(x:UOp) -> bool:
   return x.has_buffer_identity(after_ok=True) or (x.op is Ops.STAGE and x.arg is not None and x.arg.addrspace is AddrSpace.GLOBAL)
 
 def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
-  uses: dict[UOp, UOp|Stageable] = {}
+  uses: dict[UOp, UOp|Stageable] = {tsink:tsink}
   stageable: dict[UOp, Stageable] = {}
   for x in reversed(tsink.toposort()):
-    if x is tsink: continue
-    if (is_stageable:=isinstance(use:=uses.get(x,x), Stageable)) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}:
+    if isinstance(use:=uses[x], Stageable) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}:
       stageable.setdefault(x, use)
     # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => stageable.
-    if x in stageable or kernel_boundary(x) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not is_stageable): use = x
+    if x in stageable or kernel_boundary(x) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Stageable)): use = x
     for s in x.src:
       # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
       src_use = Stageable.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
@@ -142,7 +141,7 @@ def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   if all(r.src[1].get_idx() is ind.src[1].get_idx() for r in reads): return None
   frngs = apply_reshape(dst.shape, src_shape:=tuple(s.val if (s:=r.src[0]).op is Ops.CONST else s for r in src.ranges), UOp.sink(*src.ranges)).src
   store = UOp.alloc(dst.shape, src.dtype, device=src.device).index(*frngs).store(src)
-  end = graph_rewrite(store, pm_gate_ranges, ctx=dict(zip(src.ranges, srngs:=new_ranges(src_shape))), bottom_up=True).end(*srngs)
+  end = store.substitute(dict(zip(src.ranges, srngs:=new_ranges(src_shape))), extra_pm=pm_gate_ranges).end(*srngs)
   return ind.store(end.buf_uop.after(end).index(*frngs))
 
 def gate_ranges(ctx, x:UOp) -> None:
