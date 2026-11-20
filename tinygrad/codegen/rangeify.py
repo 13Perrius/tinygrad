@@ -78,7 +78,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
         if not (kernel_boundary(sb:=s if x.op is Ops.CALL else s.base) or sb.is_variable): stageable[sb] = Stageable.FORCE
   return stageable
 
-def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable], dict[UOp, tuple[list[UOp], bool]]]:
+def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable], dict[UOp, list[UOp]]]:
   info: dict[UOp, tuple[list[UOp], bool]] = {}
   stageable = count_uses(tsink)
   for x in tsink.toposort():
@@ -95,12 +95,12 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
       # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
       elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (bufs, red)
-  return stageable, info
+  return stageable, {x:b for x,(b,_) in info.items()}
 
 @dataclass
 class StageCtx:
   stageable: dict[UOp, Stageable]
-  info: dict[UOp, tuple[list[UOp], bool]]
+  buffers: dict[UOp, list[UOp]]
   device: str|tuple[str, ...]
   limit: int
 
@@ -113,7 +113,7 @@ pm_insert_stages = PatternMatcher([
 ])
 
 def limit_buffers(ctx, s:UOp) -> UOp:
-  if len(dedup(sum((ctx.info.get(u, ([], False))[0] for u in s.src), []))) < ctx.limit or s.op not in GroupOp.Elementwise|{Ops.STACK}: return s
+  if len(dedup(sum((ctx.buffers.get(u, []) for u in s.src), []))) < ctx.limit or s.op not in GroupOp.Elementwise|{Ops.STACK}: return s
   if s.op is Ops.STACK and (n:=len(s.src)) > ctx.limit:
     ctx.stageable.update({(l:=UOp.stack(*s.src[:n//2])):Stageable.FORCE, (r:=UOp.stack(*s.src[n//2:])):Stageable.FORCE})
     return l.cat(r)
