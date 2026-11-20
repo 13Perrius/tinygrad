@@ -246,7 +246,7 @@ def fold_where_closure(cond:UOp, t:UOp, f:UOp) -> UOp|None:
   return cond.where(t.substitute({cond: cond.const_like(True)}), f.substitute({cond: cond.const_like(False)}))
 
 def dead_end(e:UOp, a:UOp, n:UOp) -> UOp|None:
-  # An END can be removed if it solely ends unused ranges.  src[0] of the AFTER is a NOOP, so nothing is ordered relative to a RANGE in its src. 
+  # An END can be removed if it solely ends unused ranges.  src[0] of the AFTER is a NOOP, so nothing is ordered relative to a RANGE in its src.
   ended, deps = e.src[1:], a.src[1:]
   if any(r in ended for s in deps for r in s.ranges if r is not s): return None
   return n.after(*[s for s in deps if s.op is not Ops.RANGE])
@@ -485,8 +485,6 @@ sym = symbolic+pm_simplify_valid+PatternMatcher([
    lambda index, gate, alt: UOp.store(index.src[0].index(index.src[1].valid(gate)), alt)),
   (UPat.store(UPat(Ops.INDEX, name="index"), UPat.var("gate").where(UPat.load(UPat(Ops.INDEX, name="index")), UPat.var("alt"))),
    lambda index, gate, alt: UOp.store(index.src[0].index(index.src[1].valid(gate.logical_not())), alt)),
-  # fold gated LOAD/STORE
-  (UPat(Ops.STORE, src=(UPat(), invalid_pat), name="x"), lambda i,x: UOp(Ops.NOOP).after(*x.src)),
   # store of where with invalid -> gated store
   (UPat(Ops.STORE, src=(UPat(Ops.INDEX, name="index"), UPat.var("cond").where(UPat.var("val"), invalid_pat))),
    lambda index, cond, val, i: UOp.store(index.src[0].index(index.src[1].valid(cond)), val)),
