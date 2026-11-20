@@ -136,6 +136,29 @@ pm_stage_to_anon_store = PatternMatcher([
   (UPat((Ops.MSELECT, Ops.MSTACK), name="m"), lambda m: m.replace(src=tuple(s.base for s in m.src)).view_as(m.shape))
 ])
 
+@dataclass
+class SplitCtx:
+  rids: dict[tuple[AxisType, int], int]
+  args: list[UOp] = field(default_factory=list)
+
+def add_arg(ctx, x:UOp) -> UOp|None:
+  if not kernel_boundary(x): return None
+  ctx.args.append(x)
+  return x.param_like(slot=len(ctx.args)-1)
+
+def add_range(ctx, r:UOp) -> UOp: return r.replace(arg=(r.arg[0], ctx.rids[r.arg]))
+
+pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
+
+def split_kernels(s:UOp) -> UOp:
+  # Codegen prefers that ranges are ordered and renumbered according to creation order.  Initial ID < 0 => a RANGE inserted by rangeify.
+  rargs = [x.arg for x in s.toposort(gate=lambda x: not kernel_boundary(x)) if x.op is Ops.RANGE]
+  rargs = sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1])))
+  s = graph_rewrite(s, pm_kernel, ctx=(ctx:=SplitCtx({arg:i for i,arg in enumerate(rargs)})), bottom_up=True, walk=True, name="kernel")
+  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*ctx.args)
+
+pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
+
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not kernel_boundary(x)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
   if all(r.src[1].get_idx() is ind.src[1].get_idx() for r in reads): return None
@@ -160,29 +183,6 @@ pm_finalize_graph = PatternMatcher([
   (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstk"),), name="msel"), lambda msel, mstk: mstk.src[msel.arg]),
   (UPat(Ops.REDUCE, name="r"), lambda r: r.replace(src=(r.src[0], *[s for s in r.src[1:] if s.op is not Ops.CONST]))),
 ])
-
-@dataclass
-class SplitCtx:
-  rids: dict[tuple[AxisType, int], int]
-  args: list[UOp] = field(default_factory=list)
-
-def add_arg(ctx, x:UOp) -> UOp|None:
-  if not kernel_boundary(x): return None
-  ctx.args.append(x)
-  return x.param_like(slot=len(ctx.args)-1)
-
-def add_range(ctx, r:UOp) -> UOp: return r.replace(arg=(r.arg[0], ctx.rids[r.arg]))
-
-pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
-
-def split_kernels(s:UOp) -> UOp:
-  # Codegen prefers that ranges are ordered and renumbered according to creation order.  Initial ID < 0 => a RANGE inserted by rangeify.
-  rargs = [x.arg for x in s.toposort(gate=lambda x: not kernel_boundary(x)) if x.op is Ops.RANGE]
-  rargs = sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1])))
-  s = graph_rewrite(s, pm_kernel, ctx=(ctx:=SplitCtx({arg:i for i,arg in enumerate(rargs)})), bottom_up=True, walk=True, name="kernel")
-  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*ctx.args)
-
-pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
 
 def get_kernel_graph(tsink:UOp) -> UOp:
   ctx = StageCtx(*count_buffers(tsink, DEV.device == 'WEBGPU'), tsink.device, MAX_KERNEL_BUFFERS.value or {'WEBGPU':8}.get(DEV.device, 0))
