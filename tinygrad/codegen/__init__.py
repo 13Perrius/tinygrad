@@ -24,35 +24,12 @@ from tinygrad.codegen.opt.postrange import apply_opts
 from tinygrad.codegen.late.gater import pm_move_gates_from_index
 from tinygrad.codegen.simplify import pm_simplify_ranges, pm_flatten_range, pm_split_ranges, pm_load_collapse, pm_reduce_unparented
 from tinygrad.codegen.multi import multi_pm
-from tinygrad.codegen.prepare import pm_gated_index, expand_bitcast, prepare_rangeify
-from tinygrad.codegen.indexing import apply_movement_op
+from tinygrad.codegen.prepare import pm_mops, expand_bitcast, _mop_index, prepare_rangeify
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
 from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing, pm_simplify_add_image
 from tinygrad.codegen.rangeify import StageOpts, get_kernel_graph, stack_select
 from tinygrad.codegen.memory import memory_plan_rewrite
-
-def _valid(i:UOp) -> UOp:
-  # an index is invalid where its valid is false, the gates inside the index math are lifted out first
-  if any(x.is_invalid for x in i.get_idx().backward_slice): i = graph_rewrite(i, symbolic, name="lift gates")
-  return i.get_valid()
-
-# movement op on INDEX as a PatternMatcher
-def _mop_index(r:UOp, idx:UOp):
-  idxs, in_shape, arg = idx.src[1:], r.src[0].shape, r.marg
-  if partial := len(idxs) != len(r.shape):
-    src_prefix = len(in_shape) - len(r.shape[len(idxs):])
-    if r.op is not Ops.RESHAPE or src_prefix < 0 or in_shape[src_prefix:] != r.shape[len(idxs):]: return None
-    in_shape, arg = in_shape[:src_prefix], r.shape[:len(idxs)]
-  new_idxs = apply_movement_op(r.op, in_shape, arg, idxs)
-  kept = {UOp.const(True)} | {c for i in new_idxs for c in _valid(i).split_uop(Ops.AND)}
-  dropped = dedup(c for i in idxs for c in _valid(i).split_uop(Ops.AND) if c not in kept)
-  if (ret := r.src[0].index(*new_idxs, arg=idx.arg)).shape != idx.shape and partial: return None
-  # the gates the movement op dropped from the indexes still gate the value
-  if dropped: ret = dropped[0].uprod(*dropped[1:]).where(ret, ret.dtype.const(0))
-  return ret.after(*[i for i in idxs if i.op_in_backward_slice_with_self(*GroupOp.Effect)])
-
-pm_mop_index = PatternMatcher([(UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"), _mop_index)])
 
 def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
@@ -162,7 +139,7 @@ def do_stack_wmma(u:UOp):
       src.append(b)
   return u.replace(src=tuple(src))
 
-devectorizer2 = pm_mop_index+pm_gated_index+PatternMatcher([
+devectorizer2 = pm_mops+PatternMatcher([
   # unpack broadcasting
   (UPat(GroupOp.Elementwise|{Ops.LOAD,Ops.STORE}, name="b"), do_devectorize),
   # INDEX without src is nothing (TODO: this should be in mop_cleanup)
@@ -254,7 +231,7 @@ def add_local_buffer(ctx, x:UOp):
 
 pm_add_local_buffers = PatternMatcher([
   (UPat(Ops.STAGE, name="x"), add_local_buffer),
-])+pm_mop_index+pm_gated_index
+])+pm_mops
 
 # float ALUs need a float operand
 # make that cast explicit before the decomps, which expand SIN/LOG2/EXP2 into float polynomials and assert a float operand
@@ -297,7 +274,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   sink = graph_rewrite(ast, multi_pm, name="multi_pm")
 
   # preprocess
-  sink = graph_rewrite(sink, pm_mop_index+pm_gated_index+pm_expand_value_bitcast, name="early movement ops", bottom_up=True)
+  sink = graph_rewrite(sink, pm_mops+pm_expand_value_bitcast, name="early movement ops", bottom_up=True)
 
   # first we optimize
   if optimize:
@@ -691,7 +668,7 @@ def copy_kernel_to_store(call:UOp, dst:UOp, src:UOp, n:UOp|None=None, r:UOp|None
 def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
   if dst.is_virtual or src.is_virtual or (dst.device == src.device and not dst.on_disk()): return None
-  sink = graph_rewrite(ast, sym+pm_gated_index+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
+  sink = graph_rewrite(ast, sym+pm_mops+pm_flatten_range+pm_simplify_ranges, init_ctx=MapCtx, name="simplify ranges in copy")
   # the simplified body is kept only if it is a copy, any other kernel goes to codegen unchanged
   return pm_copy_kernel.rewrite(call.replace(src=(sink,) + call.src[1:]))
 

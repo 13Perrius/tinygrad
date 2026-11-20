@@ -1,7 +1,7 @@
 from tinygrad.uop.ops import PatternMatcher, UPat, UOp, Ops, GroupOp, Invalid
 from tinygrad.dtype import AddrSpace
 
-# TODO: pm_mop_index from rangeify belongs here. this is all pattern matchers that strictly clean up movement ops
+# TODO: pm_mops from rangeify belongs here. this is all pattern matchers that strictly clean up movement ops
 
 mop_cleanup = PatternMatcher([
   # merge adjacent SHRINKs
