@@ -66,13 +66,13 @@ def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
     if isinstance(use:=uses[x], Stageable) and x.op in GroupOp.Elementwise|{Ops.REDUCE,Ops.SHRINK}:
       stageable.setdefault(x, use)
     # A kernel, a movement op, or a REDUCE are all distinct uses. >=2 distinct uses => stageable.
-    if x in stageable or kernel_boundary(x) or (x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Stageable)): use = x
+    if x in stageable or kernel_boundary(x) or x.op in GroupOp.Movement|{Ops.REDUCE} and not isinstance(use, Stageable): use = x
     for s in x.src:
       # A use of a broadcasted src is always CANDIDATE because it drops leading ranges, so distinct uses might still index into it uniformly.
       src_use = Stageable.CANDIDATE if x.op in GroupOp.Broadcastable|{Ops.EXPAND} and x.max_numel() >= 2*s.max_numel() else use
       if uses.setdefault(s, src_use) is not src_use: uses[s] = Stageable.RANGES
     # MSTACK, MSELECT, and custom kernel or program srcs are always materialized. MSTACK and MSELECT srcs drop their views.
-    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or (x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo))):
+    if x.op is Ops.MSTACK or x.op is Ops.MSELECT or x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo)):
       for s in x.src_without_body:
         if not (kernel_boundary(sb:=s if x.op is Ops.CALL else s.base) or sb.is_variable): stageable[sb] = Stageable.FORCE
   return stageable
@@ -81,7 +81,7 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
   info: dict[UOp, tuple[list[UOp], bool]] = {}
   stageable = count_uses(tsink)
   for x in tsink.toposort():
-    if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or (count_vars and x.is_variable):
+    if kernel_boundary(x) or x.op in {Ops.MSTACK,Ops.MSELECT,Ops.CALL} or count_vars and x.is_variable:
       info[x] = ([x], False)
       continue
     buffers = dedup([b for s in x.src for b in info[s][0]])
@@ -92,10 +92,9 @@ def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable
       # A candidate is staged if it contains >3 buffers, a reduce over a buffer, or was already forced.  A scalar is never staged.
       if (len(buffers) > 3 or reduce) and x.ndim > 0: v = stageable[x] = Stageable.FORCE
       if v is Stageable.FORCE: buffers, reduce = [x], False
-      # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
-      elif v is not Stageable.RANGES or x.max_numel() == 1: del stageable[x]
     info[x] = (buffers, reduce)
-  return stageable, {x:b for x,(b,_) in info.items()}
+  # RANGES => >=2 distinct uses, so we stage the uop with fresh ranges (but no location) to avoid graph blow-up due to repeated indexing.
+  return {x:v for x,v in stageable.items() if v is Stageable.FORCE or v is Stageable.RANGES and x.max_numel() > 1}, {x:b for x,(b,_) in info.items()}
 
 @dataclass
 class StageCtx:
