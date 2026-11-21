@@ -53,11 +53,15 @@ pm_convert_ranges = PatternMatcher([
   (UPat.var("x").after(UPat.var("x").index(allow_any_len=True).store(invalid_pat).end(allow_any_len=True)).index(allow_any_len=True), lambda x, i: i)
 ])
 
-# A stageable uop is a candidate to be staged to the global address space.
-Stageable = Enum('Stageable', [('CANDIDATE'), ('RANGES'), ('FORCE')])
-
 def kernel_boundary(x:UOp) -> bool:
   return x.has_buffer_identity(after_ok=True) or (x.op is Ops.STAGE and x.arg is not None and x.arg.addrspace is AddrSpace.GLOBAL)
+
+def call_arg(x:UOp) -> bool:
+  if x.op is Ops.RANGE: return x.axis_type is AxisType.DEVICE
+  return kernel_boundary(x) or ((p:=x.without_after).op in {Ops.PARAM,Ops.EXTERN} and p.arg.addrspace is AddrSpace.ALU)
+
+# A stageable uop is a candidate for staging to the global address space.
+Stageable = Enum('Stageable', [('CANDIDATE'), ('RANGES'), ('FORCE')])
 
 def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
   uses: dict[UOp, UOp|Stageable] = {tsink:tsink}
@@ -74,7 +78,7 @@ def count_uses(tsink:UOp) -> dict[UOp, Stageable]:
     # MSTACK, MSELECT, and custom kernel or program srcs are always materialized. MSTACK and MSELECT srcs drop their views.
     if x.op is Ops.MSTACK or x.op is Ops.MSELECT or x.op is Ops.CALL and (x.body.op is Ops.PROGRAM or isinstance(x.body.arg, KernelInfo)):
       for s in x.src_without_body:
-        if not (kernel_boundary(sb:=s if x.op is Ops.CALL else s.base) or sb.is_variable): stageable[sb] = Stageable.FORCE
+        if not call_arg(sb:=s if x.op is Ops.CALL else s.base): stageable[sb] = Stageable.FORCE
   return stageable
 
 def count_buffers(tsink:UOp, count_vars:bool=False) -> tuple[dict[UOp, Stageable], dict[UOp, list[UOp]]]:
@@ -141,22 +145,24 @@ class SplitCtx:
   args: list[UOp] = field(default_factory=list)
 
 def add_arg(ctx, x:UOp) -> UOp|None:
-  if not kernel_boundary(x): return None
-  ctx.args.append(x)
-  return x.param_like(slot=len(ctx.args)-1)
+  if not call_arg(x): return None
+  ctx.args.append(a:=UOp.variable("_device_num", 0, x.vmax, x.dtype) if x.op is Ops.RANGE else x)
+  return a.param_like(slot=len(ctx.args)-1)
 
-def add_range(ctx, r:UOp) -> UOp: return r.replace(arg=(r.arg[0], ctx.rids[r.arg]))
+def add_range(ctx, r:UOp) -> UOp:
+  if r.src[0].op is not Ops.CONST: return r.replace(src=(graph_rewrite(r.src[0], pm_kernel, ctx=ctx, walk=True),), arg=(r.arg[0], ctx.rids[r.arg]))
+  return r.replace(arg=(r.arg[0], ctx.rids[r.arg]))
 
 pm_kernel = PatternMatcher([(UPat(GroupOp.All, name="x"), add_arg), (UPat(Ops.RANGE, name="r"), add_range)])
 
-def split_kernels(s:UOp) -> UOp:
+def split_kernel(s:UOp) -> UOp|None:
   # Codegen prefers that ranges are ordered and renumbered according to creation order.  Initial ID < 0 => a RANGE inserted by rangeify.
   rargs = [x.arg for x in s.toposort(gate=lambda x: not kernel_boundary(x)) if x.op is Ops.RANGE]
-  rargs = sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1])))
-  s = graph_rewrite(s, pm_kernel, ctx=(ctx:=SplitCtx({arg:i for i,arg in enumerate(rargs)})), bottom_up=True, walk=True, name="kernel")
-  return s.end(*sorted(s.ranges, key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*ctx.args)
+  rids = {arg:i for i,arg in enumerate(sorted(rargs, key=lambda arg: (arg[0], arg[1] < 0, abs(arg[1]))))}
+  s = graph_rewrite(s if s.op is Ops.STORE else s.src[0], pm_kernel, ctx=(ctx:=SplitCtx(rids)), bottom_up=True, walk=True, name="kernel")
+  return s.end(*sorted([r for r in s.ranges if r.axis_type is not AxisType.DEVICE], key=lambda r: r.arg)).sink(arg=KernelInfo()).call(*ctx.args)
 
-pm_split_kernels = PatternMatcher([(UPat((Ops.STORE, Ops.END), name="s"), lambda s: split_kernels(s.src[0] if s.op is Ops.END else s))])
+pm_split_kernels = PatternMatcher([(UPat((Ops.STORE), name="s"), split_kernel), (UPat.var("x").end(allow_any_len=True), lambda x: x)])
 
 def fix_store_hazard(ind:UOp, dst:UOp, src:UOp) -> UOp|None:
   reads = [r for r in src.toposort(gate=lambda x: not kernel_boundary(x)) if r.op is Ops.INDEX and r.buf_uop is dst.buf_uop]
@@ -190,7 +196,7 @@ def get_kernel_graph(tsink:UOp) -> UOp:
   tsink = graph_rewrite(tsink, pm_add_ranges, walk=True, name="add ranges")
   tsink = graph_rewrite(tsink, pm_convert_ranges+pm_push_ranges, bottom_up=True, name="push ranges")
   tsink = graph_rewrite(tsink, pm_finalize_graph+pm_gated_index+symbolic+pm_reduce_simplify, name="finalize graph")
-  tsink = graph_rewrite(tsink, pm_split_kernels, bottom_up=True, name="split kernels")
+  tsink = graph_rewrite(tsink, pm_split_kernels, walk=True, name="split kernels")
 
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
   if SPEC:
