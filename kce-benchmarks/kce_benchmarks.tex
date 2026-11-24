@@ -1,0 +1,101 @@
+\documentclass[10pt,letterpaper]{article}
+
+\usepackage[margin=0.6in,landscape]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[dvipsnames]{xcolor}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8em}
+
+\title{KCE Benchmarks}
+\author{}
+\date{\vspace{-5em}}
+
+\begin{document}
+\newlength{\wvA}\settowidth{\wvA}{\footnotesize\textbf{15}}
+\newlength{\wvB}\settowidth{\wvB}{\footnotesize\textbf{168.07}}
+\newlength{\wvC}\settowidth{\wvC}{\footnotesize\textbf{1676.18}}
+\newlength{\wvD}\settowidth{\wvD}{\footnotesize\textbf{1103.80}}
+\newlength{\wvE}\settowidth{\wvE}{\footnotesize\textbf{63.39}}
+\newlength{\wvF}\settowidth{\wvF}{\footnotesize\textbf{221961.1}}
+\newlength{\wvG}\settowidth{\wvG}{\footnotesize\textbf{3141.6}}
+\newlength{\wpct}\settowidth{\wpct}{\footnotesize\textbf{\boldmath($-$$<$0.1\%)}}
+\newlength{\wcase}\settowidth{\wcase}{\footnotesize \texttt{fold\_2convs\_sgd\_nesterov\_momentum\_wd} (new)}
+\maketitle
+\thispagestyle{empty}
+
+I benchmarked this branch on an AMD Turin CPU and an RTX 5090 using the following commands:
+
+\begin{tabular}{@{}l@{}}
+\texttt{DEV=CPU ROUNDS=8 CASE=KCE\_LARGE OUT=<path to dump> gmake -s new\_run} \\
+\texttt{DEV=CUDA:PTX ROUNDS=8 CASE=KCE\_LARGE RT=1 OUT=<path to runtime dump> gmake -s new\_run} \\
+\end{tabular}
+
+The upstream commit that I benchmarked against was \texttt{64c846997}. The runtime numbers parse \texttt{DEBUG=2} kernel times and sum them.
+
+To reproduce everything, just initialize the \texttt{tinygrad-base} submodule, set up a venv at the project root, and run the above two commands with whichever backends you want.
+
+%% ============================================================
+\subsection*{Kernel count decreases}
+
+{\footnotesize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\wcase} >{\raggedleft\arraybackslash}p{\wvA}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvB}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvC}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvD}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvE}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvF}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvG}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct}@{}}
+\toprule
+\textbf{Case} & \multicolumn{2}{l}{\textbf{Kernels}} & \multicolumn{2}{l}{\textbf{Scheduler}} & \multicolumn{2}{l}{\textbf{Codegen}} & \multicolumn{2}{l}{\textbf{Sched.\,+\,Codegen}} & \multicolumn{2}{l}{\textbf{Runtime}} & \multicolumn{2}{l}{\textbf{Est.\ FLOPs}} & \multicolumn{2}{l}{\textbf{Est.\ mem}} \\
+ & \multicolumn{2}{l}{} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(M)} & \multicolumn{2}{l}{(MB)} \\
+\midrule
+Mean, new vs.\ old &  & \textbf{\boldmath($-$17.6\%)} &  & \textbf{\boldmath($-$14.4\%)} &  & \textbf{\boldmath($-$4.5\%)} &  & \textbf{\boldmath($-$6.0\%)} &  & \textbf{\boldmath($-$0.7\%)} &  & \textbf{\boldmath($+$0.8\%)} &  & \textbf{\boldmath($-$1.2\%)} \\
+\midrule
+\texttt{adam\_2convs\_fuse} (new) & \textbf{15} & \textbf{\boldmath($-$11.8\%)} & \textbf{140.01} & \textbf{\boldmath($-$16.7\%)} & \textbf{873.65} & \textbf{\boldmath($-$6.6\%)} & \textbf{1013.66} & \textbf{\boldmath($-$8.2\%)} & \textbf{63.00} & \textbf{\boldmath($-$0.6\%)} & 221961.1 &  & \textbf{3141.3} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{adam\_2convs\_fuse} (old) & 17 &  & 168.07 &  & 935.73 &  & 1103.80 &  & 63.39 &  & 221961.1 &  & 3141.6 &  \\
+\addlinespace[0.6em]
+\texttt{adam\_conv\_fuse} (new) & \textbf{13} & \textbf{\boldmath($-$13.3\%)} & \textbf{83.22} & \textbf{\boldmath($-$16.0\%)} & \textbf{369.24} & \textbf{\boldmath($-$2.5\%)} & \textbf{452.45} & \textbf{\boldmath($-$5.3\%)} & \textbf{5.66} & \textbf{\boldmath($-$5.5\%)} & 14566.6 &  & \textbf{1587.8} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{adam\_conv\_fuse} (old) & 15 &  & 99.10 &  & 378.72 &  & 477.83 &  & 6.00 &  & 14566.6 &  & 1587.9 &  \\
+\addlinespace[0.6em]
+\texttt{adam\_step\_fusion} (new) & \textbf{11} & \textbf{\boldmath($-$15.4\%)} & \textbf{64.60} & \textbf{\boldmath($-$16.4\%)} & \textbf{329.18} & \textbf{\boldmath($-$3.0\%)} & \textbf{393.78} & \textbf{\boldmath($-$5.5\%)} & \textbf{8.87} & \textbf{\boldmath($-$1.5\%)} & 137799.8 &  & \textbf{1040.6} & \textbf{\boldmath($-$11.4\%)} \\
+\texttt{adam\_step\_fusion} (old) & 13 &  & 77.24 &  & 339.41 &  & 416.65 &  & 9.01 &  & 137799.8 &  & 1174.9 &  \\
+\addlinespace[0.6em]
+\texttt{fold\_2convs\_sgd\_nesterov\_momentum\_wd} (new) & \textbf{11} & \textbf{\boldmath($-$15.4\%)} & \textbf{136.75} & \textbf{\boldmath($-$14.8\%)} & \textbf{848.61} & \textbf{\boldmath($-$6.7\%)} & \textbf{985.36} & \textbf{\boldmath($-$8.0\%)} & \textbf{62.89} & \textbf{\boldmath($-$1.1\%)} & 221960.9 &  & \textbf{3141.0} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{fold\_2convs\_sgd\_nesterov\_momentum\_wd} (old) & 13 &  & 160.60 &  & 909.87 &  & 1070.46 &  & 63.59 &  & 221960.9 &  & 3141.3 &  \\
+\addlinespace[0.6em]
+\texttt{fold\_conv\_batchnorm\_optim} (new) & \textbf{19} & \textbf{\boldmath($-$17.4\%)} & \textbf{106.69} & \textbf{\boldmath($-$12.8\%)} & \textbf{835.45} & \textbf{\boldmath($-$1.0\%)} & \textbf{942.14} & \textbf{\boldmath($-$2.5\%)} & \textbf{85.73} & \textbf{\boldmath($-$2.4\%)} & \textbf{19205.6} & \textbf{\boldmath($-$3.3\%)} & \textbf{8351.0} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{fold\_conv\_batchnorm\_optim} (old) & 23 &  & 122.35 &  & 844.25 &  & 966.60 &  & 87.85 &  & 19855.9 &  & 8351.1 &  \\
+\addlinespace[0.6em]
+\texttt{fold\_conv\_batchnorm\_optim\_adam} (new) & \textbf{33} & \textbf{\boldmath($-$10.8\%)} & \textbf{115.24} & \textbf{\boldmath($-$16.9\%)} & \textbf{883.37} & \textbf{\boldmath($-$0.8\%)} & \textbf{998.61} & \textbf{\boldmath($-$3.0\%)} & \textbf{86.35} & \textbf{\boldmath($-$2.0\%)} & \textbf{19205.6} & \textbf{\boldmath($-$3.3\%)} & \textbf{8351.2} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{fold\_conv\_batchnorm\_optim\_adam} (old) & 37 &  & 138.67 &  & 890.73 &  & 1029.40 &  & 88.10 &  & 19855.9 &  & 8351.2 &  \\
+\addlinespace[0.6em]
+\texttt{sgd\_2convs\_fuse} (new) & \textbf{7} & \textbf{\boldmath($-$22.2\%)} & \textbf{134.74} & \textbf{\boldmath($-$12.7\%)} & \textbf{819.11} & \textbf{\boldmath($-$7.0\%)} & \textbf{953.85} & \textbf{\boldmath($-$7.8\%)} & \textbf{62.97} & \textbf{\boldmath($-$1.6\%)} & 221960.7 &  & \textbf{3140.0} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{sgd\_2convs\_fuse} (old) & 9 &  & 154.41 &  & 880.34 &  & 1034.74 &  & 64.00 &  & 221960.7 &  & 3140.3 &  \\
+\addlinespace[0.6em]
+\texttt{sgd\_4convs\_fuse} (new) & \textbf{15} & \textbf{\boldmath($-$21.1\%)} & \textbf{226.67} & \textbf{\boldmath($-$16.6\%)} & \textbf{1642.92} & \textbf{\boldmath($-$2.0\%)} & \textbf{1869.58} & \textbf{\boldmath($-$4.0\%)} & \textbf{54.93} & \textbf{\boldmath($-$0.2\%)} & \textbf{641311.0} & \textbf{\boldmath($-$$<$0.1\%)} & \textbf{4452.1} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{sgd\_4convs\_fuse} (old) & 19 &  & 271.76 &  & 1676.18 &  & 1947.94 &  & 55.04 &  & 641392.6 &  & 4452.9 &  \\
+\addlinespace[0.6em]
+\texttt{sgd\_conv\_fuse} (new) & \textbf{5} & \textbf{\boldmath($-$28.6\%)} & \textbf{77.84} & \textbf{\boldmath($-$10.5\%)} & \textbf{316.71} & \textbf{\boldmath($-$3.1\%)} & \textbf{394.55} & \textbf{\boldmath($-$4.6\%)} & \textbf{5.44} & \textbf{\boldmath($-$0.7\%)} & 14566.6 &  & \textbf{1587.7} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\texttt{sgd\_conv\_fuse} (old) & 7 &  & 86.99 &  & 326.69 &  & 413.68 &  & 5.47 &  & 14566.6 &  & 1587.7 &  \\
+\addlinespace[0.6em]
+\texttt{symbolic\_jit\_attention} (new) & \textbf{4} & \textbf{\boldmath($-$20.0\%)} & \textbf{65.40} & \textbf{\boldmath($-$10.2\%)} & \textbf{185.97} & \textbf{\boldmath($-$11.8\%)} & \textbf{251.37} & \textbf{\boldmath($-$11.3\%)} & 2.90 &  & 720.4 &  & \textbf{1099.2} & \textbf{\boldmath($-$0.8\%)} \\
+\texttt{symbolic\_jit\_attention} (old) & 5 &  & 72.79 &  & 210.76 &  & 283.55 &  & \textbf{2.67} & \textbf{\boldmath($-$7.8\%)} & \textbf{627.0} & \textbf{\boldmath($-$13.0\%)} & 1107.6 &  \\
+\bottomrule
+\end{tabular}
+}
+
+%% ============================================================
+\subsection*{Kernel count increases}
+
+{\footnotesize\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{\wcase} >{\raggedleft\arraybackslash}p{\wvA}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvB}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvC}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvD}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvE}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvF}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct} >{\raggedleft\arraybackslash}p{\wvG}@{\hspace{0.2em}}>{\raggedleft\arraybackslash}p{\wpct}@{}}
+\toprule
+\textbf{Case} & \multicolumn{2}{l}{\textbf{Kernels}} & \multicolumn{2}{l}{\textbf{Scheduler}} & \multicolumn{2}{l}{\textbf{Codegen}} & \multicolumn{2}{l}{\textbf{Sched.\,+\,Codegen}} & \multicolumn{2}{l}{\textbf{Runtime}} & \multicolumn{2}{l}{\textbf{Est.\ FLOPs}} & \multicolumn{2}{l}{\textbf{Est.\ mem}} \\
+ & \multicolumn{2}{l}{} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(ms)} & \multicolumn{2}{l}{(M)} & \multicolumn{2}{l}{(MB)} \\
+\midrule
+Mean, new vs.\ old &  & \textbf{\boldmath($+$20.0\%)} &  & \textbf{\boldmath($-$1.8\%)} &  & \textbf{\boldmath($+$0.7\%)} &  & \textbf{\boldmath($+$0.1\%)} &  & \textbf{\boldmath($+$1.6\%)} &  & \textbf{\boldmath($-$25.0\%)} &  & \textbf{\boldmath($+$$<$0.1\%)} \\
+\midrule
+\texttt{preserve\_multistage\_reduce} (new) & 6 &  & \textbf{44.71} & \textbf{\boldmath($-$1.8\%)} & 141.16 &  & 185.88 &  & 3.91 &  & \textbf{805.6} & \textbf{\boldmath($-$25.0\%)} & 2148.5 &  \\
+\texttt{preserve\_multistage\_reduce} (old) & \textbf{5} & \textbf{\boldmath($-$16.7\%)} & 45.55 &  & \textbf{140.19} & \textbf{\boldmath($-$0.7\%)} & \textbf{185.74} & \textbf{\boldmath($-$0.1\%)} & \textbf{3.85} & \textbf{\boldmath($-$1.6\%)} & 1074.0 &  & \textbf{2148.5} & \textbf{\boldmath($-$$<$0.1\%)} \\
+\bottomrule
+\end{tabular}
+}
+
+\end{document}

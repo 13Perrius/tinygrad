@@ -1,0 +1,3 @@
+[submodule "tinygrad-base"]
+	path = tinygrad-base
+	url = https://github.com/tinygrad/tinygrad.git

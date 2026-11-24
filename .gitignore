@@ -1,3 +1,7 @@
+rangeify_perf/pickles/*
+rangeify_perf/dumps/*
+rangeify_perf/benchmarks/*
+!rangeify_perf/*/.gitkeep
 __pycache__
 .venv/
 .venv-*/
