@@ -350,6 +350,10 @@ class TestSchedule(unittest.TestCase):
     out = a-a.mean(axis=0, keepdim=True)
     check_schedule(out, 2)
 
+  def test_broadcast_full_sum_keepdim(self):
+    a = Tensor.empty(8, 8)
+    check_schedule(a + a.sum(keepdim=True), 1)  # like a + a.sum(), keepdim doesn't change fusion
+
   def test_staged_reduce_drops_expanded_axis(self):
     x = Tensor.empty(32, 16).realize()
     def ops(t):
