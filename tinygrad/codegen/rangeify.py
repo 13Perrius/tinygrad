@@ -130,7 +130,7 @@ def stage_to_store(st:UOp) -> UOp|None:
   return alloc.base.after(alloc.index(*(r:=st.src[1:])).store(st.src[0]).end(*r)).view_as(st.shape) if not st.src[0].is_invalid else alloc
 
 def fix_store_hazard(ctx:int, ind:UOp, dst:UOp, src:UOp) -> UOp|None:
-  # Fresh ALLOCs inserted via rangeify are never store hazards.  Global STAGES are always inlined or lowered, so we can skip them as well.
+  # Fresh ALLOCs inserted via rangeify are never store hazards.  Global STAGES are always inlined or lowered, so we can skip them initially.
   if (alloc:=dst.base).op is Ops.ALLOC and alloc.arg.slot >= ctx: return None
   reads = []
   for r in src.toposort(gate=lambda x: not ((x.op is Ops.STAGE and x.arg is not None and x.arg.addrspace is AddrSpace.GLOBAL) or kernel_boundary(x))):
