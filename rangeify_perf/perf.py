@@ -66,7 +66,9 @@ def restore_scheduler(): tinygrad.codegen.graph_rewrite = graph_rewrite
 
 def patch_codegen_fxn(linear, verbose=True): raise Stop((linear,))
 
-def patch_codegen(): tinygrad.engine.realize.lower_and_compile = patch_codegen_fxn
+def patch_codegen():
+  tinygrad.engine.realize.compile_cache.clear()
+  tinygrad.engine.realize.lower_and_compile = patch_codegen_fxn
 
 def restore_codegen(): tinygrad.engine.realize.lower_and_compile = lower_and_compile_unpatched
 
