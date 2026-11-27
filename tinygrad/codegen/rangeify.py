@@ -48,12 +48,17 @@ def convert_index_to_where(ind:UOp, x:UOp) -> UOp:
   gates = [r.get_valid() for r in (axes if x.op is Ops.PAD else ind.src[1:])]
   return UOp.const(True).uprod(*gates).where(ret, UOp.const(x.dtype.const(0))) if any(g is not UOp.const(True) for g in gates) else ret
 
+def fold_invalid_after(x:UOp, ind:UOp, e:UOp, i:UOp) -> UOp|None:
+  covered = all(r in UOp.sink(*ind.src[1:]).ranges for r in e.src[1:])
+  return i if covered and resolve(UOp.const(1).uprod(*[r.src[0] for r in e.src[1:]]).eq(x.numel()), default=False) else None
+
 pm_convert_index_to_where = PatternMatcher([(UPat.var("x").index(name="ind", allow_any_len=True), convert_index_to_where)])
 
 pm_convert_ranges = PatternMatcher([
   (UPat(Ops.STACK, name="x").index(name="ind", allow_any_len=True), convert_stack_to_where),
   (UPat(Ops.PAD, name="x").index(name="ind", allow_any_len=True), convert_index_to_where),
-  (UPat.var("x").after(UPat.var("x").index(allow_any_len=True).store(invalid_pat).end(allow_any_len=True)).index(allow_any_len=True), lambda x, i: i)
+  (UPat.var("x").after(UPat.var("x").index(name="ind", allow_any_len=True).store(invalid_pat).end(allow_any_len=True, name="e"))
+  .index(allow_any_len=True), fold_invalid_after)
 ])
 
 def kernel_boundary(x:UOp) -> bool:
